@@ -1,0 +1,8 @@
+readRenviron(".Renviron")
+library(mongolite)
+uri <- Sys.getenv("MONGODB_URI")
+db <- Sys.getenv("MONGODB_DB")
+cat("db=", db, "\n", sep = "")
+col <- mongo("organizations", db = db, url = uri)
+n <- col$count("{}")
+cat("ok count=", n, "\n", sep = "")

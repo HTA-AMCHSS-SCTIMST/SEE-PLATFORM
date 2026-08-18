@@ -1,0 +1,9 @@
+.Renviron
+logs/
+.Rproj.user
+.Rhistory
+.RData
+.git/
+data-raw/ping_mongo.R
+data-raw/inspect_id.R
+data-raw/test_mongo_id.R

@@ -1,0 +1,19 @@
+# Copy this file to .Renviron in the same folder (never commit .Renviron).
+# In RStudio: file.create(".Renviron") then edit, or
+#   file.copy(".Renviron.example", ".Renviron")
+
+# MongoDB — Atlas (existing cluster) OR local mongod
+# Atlas example:
+# MONGODB_URI=mongodb+srv://USER:PASSWORD@cluster.mongodb.net/?retryWrites=true&w=majority
+MONGODB_URI=mongodb://127.0.0.1:27017
+MONGODB_DB=expert_elicitation_shiny
+
+# Local development login (role picker). MUST be false on Posit Connect.
+AUTH_DEV_MODE=true
+
+# staff | survey | both
+# both = one local process: staff at / and survey at /?study=<slug>
+APP_ROLE=both
+
+# Copied into invite links
+SURVEY_PUBLIC_URL=http://127.0.0.1:3938

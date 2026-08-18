@@ -1,0 +1,12 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.Renviron
+rsconnect/
+.Rlib/
+.DS_Store
+*.html
+*.sqlite
+inst/db/
+logs/

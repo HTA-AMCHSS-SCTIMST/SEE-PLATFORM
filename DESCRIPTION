@@ -1,0 +1,22 @@
+Package: elicitation
+Title: Expert Elicitation & Statistical Platform
+Version: 0.1.0
+Authors@R: person("AMCHSS", "SCTIMST", role = c("aut", "cre"))
+Description: SHELF-style expert elicitation Shiny app for HTA / clinical
+    decision support. MongoDB storage; CRAN SHELF fitting.
+License: file LICENSE
+Encoding: UTF-8
+LazyData: true
+Depends: R (>= 4.1.0)
+Imports:
+    shiny (>= 1.8.0),
+    htmltools,
+    mongolite,
+    jsonlite,
+    ggplot2,
+    plotly,
+    SHELF
+Suggests:
+    rsconnect
+Remotes:
+RoxygenNote: 7.3.2
