@@ -39,6 +39,13 @@ chips_to_quantiles <- function(bins, levels = c(0.1, 0.5, 0.9)) {
     if (is.null(found)) found <- bins[[length(bins)]]$to
     out[[as.character(level)]] <- as.numeric(found)
   }
+  lo <- as.numeric(bins[[1]]$from)
+  hi <- as.numeric(bins[[length(bins)]]$to)
+  span <- max(hi - lo, 1e-9)
+  eps <- span * 1e-4
+  for (nm in names(out)) {
+    out[[nm]] <- min(max(out[[nm]], lo + eps), hi - eps)
+  }
   out
 }
 
@@ -65,21 +72,65 @@ chips_payload <- function(bins, total_chips, lo, hi, rationale = "") {
   )
 }
 
-quantile_payload <- function(p10, p50, p90, rationale = "") {
+quantile_payload <- function(p10, p50, p90, rationale = "", lo = NULL, hi = NULL, mode = "percentile") {
   list(
     method = "quantile",
+    mode = mode,
     quantiles = list(`0.1` = as.numeric(p10), `0.5` = as.numeric(p50), `0.9` = as.numeric(p90)),
+    lowerBound = lo,
+    upperBound = hi,
+    rationale = rationale
+  )
+}
+
+quartile_payload <- function(q1, m, q3, rationale = "", lo = NULL, hi = NULL) {
+  list(
+    method = "quantile",
+    mode = "quartile",
+    quantiles = list(`0.25` = as.numeric(q1), `0.5` = as.numeric(m), `0.75` = as.numeric(q3)),
+    lowerBound = lo,
+    upperBound = hi,
     rationale = rationale
   )
 }
 
 quantiles_from_payload <- function(payload) {
   q <- payload$quantiles
-  if (!is.null(q) && !is.null(q[["0.1"]])) {
-    return(list(`0.1` = as.numeric(q[["0.1"]]), `0.5` = as.numeric(q[["0.5"]]), `0.9` = as.numeric(q[["0.9"]])))
+  if (!is.null(q)) {
+    if (!is.null(q[["0.1"]]) && !is.null(q[["0.5"]]) && !is.null(q[["0.9"]])) {
+      return(list(`0.1` = as.numeric(q[["0.1"]]), `0.5` = as.numeric(q[["0.5"]]), `0.9` = as.numeric(q[["0.9"]])))
+    }
+    if (!is.null(q[["0.25"]]) && !is.null(q[["0.5"]]) && !is.null(q[["0.75"]])) {
+      return(list(`0.25` = as.numeric(q[["0.25"]]), `0.5` = as.numeric(q[["0.5"]]), `0.75` = as.numeric(q[["0.75"]])))
+    }
   }
   if (!is.null(payload$bins)) return(chips_to_quantiles(payload$bins))
   NULL
+}
+
+payload_probs <- function(payload) {
+  q <- quantiles_from_payload(payload)
+  if (is.null(q)) return(c(0.1, 0.5, 0.9))
+  as.numeric(names(q))
+}
+
+validate_strict_quantiles <- function(vals, lo, hi) {
+  v <- as.numeric(unlist(vals, use.names = FALSE))
+  lo <- as.numeric(lo)
+  hi <- as.numeric(hi)
+  if (any(!is.finite(c(v, lo, hi)))) stop("Enter numeric bounds and quantiles.")
+  if (!(lo < v[[1]])) stop("The first quantile must be greater than the lower plausible limit L.")
+  if (!(v[[length(v)]] < hi)) stop("The last quantile must be less than the upper plausible limit U.")
+  if (any(diff(v) <= 0)) {
+    stop("Quantiles must be strictly increasing (L < P10 < P50 < P90 < U or L < Q1 < M < Q3 < U).")
+  }
+  invisible(TRUE)
+}
+
+require_rationale_text <- function(text, required = TRUE) {
+  if (!isTRUE(required)) return(invisible(TRUE))
+  if (!nzchar(trimws(text %||% ""))) stop("A written rationale is required.")
+  invisible(TRUE)
 }
 
 is_chips_question <- function(q) {

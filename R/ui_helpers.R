@@ -29,7 +29,8 @@ ee_header <- function(user = NULL, extra = NULL) {
 }
 
 status_pill <- function(status) {
-  lab <- switch(status,
+  lab <- switch(
+    status %||% "",
     draft = "Draft",
     recruiting = "Published",
     eliciting = "Published",
@@ -37,7 +38,8 @@ status_pill <- function(status) {
     submitted = "Submitted",
     ongoing = "Ongoing",
     not_started = "Not started",
-    status
+    completed = "Completed",
+    status %||% "Unknown"
   )
   htmltools::span(class = paste("pill", status), lab)
 }

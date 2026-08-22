@@ -14,7 +14,7 @@ mod_chips_ui <- function(id, bin_count = 10L) {
       class = "chip-bounds",
       shiny::tags$strong("Step 1 — Plausible range"),
       shiny::tags$p(class = "muted",
-        "Enter the lowest and highest values you judge to be plausible. Equal-width bins are arranged between your limits."
+        "Bins use the plausible limits from the previous step. Adjust only if you need to correct them."
       ),
       shiny::fluidRow(
         shiny::column(6, shiny::numericInput(ns("lo"), "Lowest plausible limit", value = 0, min = 0, max = 1, step = 0.01)),
@@ -27,9 +27,19 @@ mod_chips_ui <- function(id, bin_count = 10L) {
   )
 }
 
-mod_chips_server <- function(id, bin_count = 10L, total_chips = 20L, lo0 = 0, hi0 = 1) {
+mod_chips_server <- function(id, bin_count = 10L, total_chips = 20L, lo0 = 0, hi0 = 1, bounds = NULL) {
   shiny::moduleServer(id, function(input, output, session) {
     chips <- shiny::reactiveVal(rep(0L, bin_count))
+
+    shiny::observe({
+      if (is.null(bounds)) return()
+      b <- bounds()
+      if (is.null(b)) return()
+      if (is.finite(b$lo %||% NA_real_) && is.finite(b$hi %||% NA_real_) && b$lo < b$hi) {
+        shiny::updateNumericInput(session, "lo", value = b$lo)
+        shiny::updateNumericInput(session, "hi", value = b$hi)
+      }
+    })
 
     lapply(seq_len(bin_count), function(i) {
       shiny::observeEvent(input[[paste0("add_", i)]], {

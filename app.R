@@ -15,9 +15,10 @@ if (file.exists(renviron)) {
 
 r_dir <- file.path(local_dir, "R")
 r_files <- c(
-  "config.R", "log.R", "ids.R", "mongo.R", "auth.R", "chips.R", "shelf.R",
-  "studies.R", "seed.R", "ui_helpers.R", "mod_login.R", "mod_chips.R",
-  "app_ui.R", "app_server.R"
+  "config.R", "log.R", "ids.R", "mongo.R", "auth.R", "access.R", "tokens.R",
+  "onboarding.R", "comments.R", "chips.R", "shelf.R", "studies.R", "reports.R",
+  "seed.R", "ui_helpers.R", "mod_login.R", "mod_chips.R", "survey_ui.R",
+  "staff_ui.R", "app_ui.R", "app_server.R"
 )
 for (f in r_files) {
   source(file.path(r_dir, f), local = FALSE)

@@ -133,16 +133,17 @@ create_study <- function(user, title, description = "", quantity = "",
 }
 
 list_studies_for_user <- function(user) {
-  if (user$platformRole %in% c("admin", "super_admin")) {
+  if (is_admin(user)) {
     return(mongo_all("studies", "{}", sort = '{"updatedAt": -1}'))
   }
+  if (is_expert_role(user)) return(list())
   access <- mongo_all("study_access", sprintf(
     '{"status": "active", "$or": [{"userId": %s}, {"personId": %s}]}',
     json_escape(user$id),
     json_escape(user$personId %||% "")
   ))
   ids <- unique(vapply(access, function(a) as.character(a$studyId), character(1)))
-  owned <- mongo_all("studies", q_field("ownerId", user$id))
+  owned <- if (is_facilitator(user)) mongo_all("studies", q_field("ownerId", user$id)) else list()
   extra <- lapply(ids, function(id) mongo_one("studies", q_id(id)))
   all_s <- c(owned, Filter(Negate(is.null), extra))
   seen <- character()
@@ -152,6 +153,9 @@ list_studies_for_user <- function(user) {
     if (id %in% seen) next
     seen <- c(seen, id)
     out[[length(out) + 1]] <- s
+  }
+  if (is_viewer(user)) {
+    out <- Filter(study_is_completed, out)
   }
   out
 }
@@ -186,7 +190,7 @@ invite_expert <- function(study, email, name = NULL, user) {
     json_escape(doc_id(study)),
     json_escape(doc_id(person))
   ))
-  if (is.null(exists)) {
+    if (is.null(exists)) {
     mongo_insert("study_access", list(
       studyId = doc_id(study),
       orgId = doc_id(org),
@@ -201,6 +205,11 @@ invite_expert <- function(study, email, name = NULL, user) {
       updatedAt = now
     ))
   }
+  if (identical(study$status %||% "", "draft")) {
+    mongo_update("studies", q_id(doc_id(study)), list(status = "recruiting", updatedAt = now))
+    study <- find_study(doc_id(study))
+  }
+  issue_invite_token(study, person)
   person
 }
 
@@ -224,6 +233,7 @@ study_experts <- function(study) {
       }, logical(1)))
     }
     status <- if (answered <= 0) "not_started" else if (answered >= nq) "submitted" else "ongoing"
+    tok <- if (!is.null(person)) issue_invite_token(study, person) else NULL
     list(
       personId = a$personId,
       name = person$name %||% person$email %||% "Expert",
@@ -231,6 +241,7 @@ study_experts <- function(study) {
       answeredCount = answered,
       totalQuestions = nq,
       status = status,
+      surveyUrl = if (!is.null(person)) expert_survey_url(study, person, tok) else "",
       updatedAt = a$updatedAt
     )
   })
@@ -283,21 +294,51 @@ advance_round <- function(study) {
   find_study(doc_id(study))
 }
 
-run_shelf_for_question <- function(study, question, round_number = 1L, family = "best") {
+run_shelf_for_question <- function(study, question, round_number = 1L, family = "best",
+                                   anonymize = NULL) {
   js <- current_judgments(doc_id(study), doc_id(question), round_number)
   experts <- list()
+  ids <- character()
   for (j in js) {
     qmap <- quantiles_from_payload(j$payload)
     if (is.null(qmap)) next
+    eid <- as.character(j$expertId %||% j$expertName %||% "expert")
+    ids <- c(ids, eid)
     experts[[length(experts) + 1]] <- list(
-      name = j$expertName %||% j$expertId %||% "Expert",
+      id = eid,
+      name = j$expertName %||% eid,
+      rationale = j$rationale %||% j$payload$rationale %||% "",
       quantiles = qmap
     )
   }
+  if (!length(experts)) stop("No current judgments with quantiles for this question.")
   lo <- as.numeric(question$lowerBound %||% 0)
   hi <- as.numeric(question$upperBound %||% 1)
-  fit <- run_shelf_fit(experts, lo = lo, hi = hi, preferred = family)
+  bds <- lapply(js, function(j) {
+    list(lo = j$payload$lowerBound, hi = j$payload$upperBound)
+  })
+  if (length(bds)) {
+    los <- suppressWarnings(as.numeric(vapply(bds, function(b) b$lo %||% NA_real_, numeric(1))))
+    his <- suppressWarnings(as.numeric(vapply(bds, function(b) b$hi %||% NA_real_, numeric(1))))
+    if (any(is.finite(los))) lo <- min(c(lo, los[is.finite(los)]))
+    if (any(is.finite(his))) hi <- max(c(hi, his[is.finite(his)]))
+  }
+  probs <- payload_probs(js[[1]]$payload)
+  do_anon <- if (is.null(anonymize)) isTRUE((study$protocolConfig %||% list())$anonymizeFeedback) else isTRUE(anonymize)
+  mapping <- blind_labels_for_ids(ids)
+  if (do_anon) {
+    for (i in seq_along(experts)) {
+      experts[[i]]$realName <- experts[[i]]$name
+      experts[[i]]$name <- blind_label(experts[[i]]$id, mapping)
+    }
+  }
+  fit <- run_shelf_fit(experts, lo = lo, hi = hi, probs = probs, preferred = family)
+  fit$anonymized <- do_anon
+  fit$labelMap <- as.list(mapping)
+  fit$questionId <- doc_id(question)
+  fit$roundNumber <- as.integer(round_number)
   conclusion <- build_conclusion(fit, question$title %||% question$code, length(experts))
+  params <- shelf_params_table(fit)
   agg <- mongo_insert("aggregations", list(
     studyId = doc_id(study),
     questionId = doc_id(question),
@@ -306,10 +347,49 @@ run_shelf_for_question <- function(study, question, round_number = 1L, family = 
     shelfVersion = fit$shelfVersion,
     nExperts = length(experts),
     result = fit,
+    params = params,
     conclusion = conclusion,
     createdAt = iso_now()
   ))
-  list(fit = fit, conclusion = conclusion, aggregationId = doc_id(agg), nExperts = length(experts))
+  list(
+    fit = fit, conclusion = conclusion, aggregationId = doc_id(agg),
+    nExperts = length(experts), params = params, studyId = doc_id(study),
+    questionId = doc_id(question), roundNumber = as.integer(round_number)
+  )
+}
+
+latest_aggregation <- function(study_id, question_id, round_number = NULL) {
+  q <- sprintf('{"studyId": %s, "questionId": %s}', json_escape(study_id), json_escape(question_id))
+  if (!is.null(round_number)) {
+    q <- sprintf(
+      '{"studyId": %s, "questionId": %s, "roundNumber": %s}',
+      json_escape(study_id), json_escape(question_id), as.integer(round_number)
+    )
+  }
+  docs <- mongo_all("aggregations", q, sort = '{"createdAt": -1}')
+  if (!length(docs)) return(NULL)
+  docs[[1]]
+}
+
+aggregation_as_shelf_result <- function(agg) {
+  if (is.null(agg)) return(NULL)
+  params <- agg$params
+  if (!is.null(params) && !is.data.frame(params)) {
+    params <- tryCatch(as.data.frame(params, stringsAsFactors = FALSE), error = function(e) NULL)
+  }
+  if (is.null(params) && !is.null(agg$result)) {
+    params <- tryCatch(shelf_params_table(agg$result), error = function(e) NULL)
+  }
+  list(
+    fit = agg$result,
+    conclusion = agg$conclusion,
+    aggregationId = doc_id(agg),
+    nExperts = agg$nExperts %||% length(agg$result$experts),
+    params = params,
+    studyId = agg$studyId,
+    questionId = agg$questionId,
+    roundNumber = agg$roundNumber
+  )
 }
 
 survey_url <- function(study) {

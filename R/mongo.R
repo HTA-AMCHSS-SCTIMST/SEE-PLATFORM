@@ -78,6 +78,11 @@ ensure_indexes <- function() {
     mongo_col("questions")$index('{"studyId": 1}')
     mongo_col("judgments")$index('{"studyId": 1, "questionId": 1, "expertId": 1}')
     mongo_col("study_access")$index('{"studyId": 1, "personId": 1}')
+    mongo_col("invite_tokens")$index('{"token": 1}')
+    mongo_col("onboarding")$index('{"studyId": 1, "personId": 1}')
+    mongo_col("elicitation_bounds")$index('{"studyId": 1, "personId": 1, "roundNumber": 1}')
+    mongo_col("peer_comments")$index('{"studyId": 1, "questionId": 1, "roundNumber": 1}')
+    mongo_col("aggregations")$index('{"studyId": 1, "questionId": 1, "roundNumber": 1}')
   }, silent = TRUE)
   invisible(TRUE)
 }

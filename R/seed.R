@@ -137,6 +137,13 @@ seed_demo <- function(user) {
     granted <- granted + 1L
   }
 
+  for (row in access_map) {
+    if (!identical(row$role, "expert")) next
+    pid <- person_ids[[row$email]]
+    person <- mongo_one("people", q_id(pid))
+    if (!is.null(person)) issue_invite_token(find_study(sid), person)
+  }
+
   dummy <- seed_dummy_shelf_judgments(find_study(sid), person_ids)
 
   list(
@@ -216,7 +223,7 @@ seed_dummy_shelf_judgments <- function(study, person_ids = NULL) {
     if (!is.null(q_quant)) {
       save_judgment(
         study, q_quant, pid, ex$name,
-        quantile_payload(ex$p10, ex$p50, ex$p90, ex$rationale),
+        quantile_payload(ex$p10, ex$p50, ex$p90, ex$rationale, lo = 0, hi = 1),
         round_number = 1L
       )
       n <- n + 1L

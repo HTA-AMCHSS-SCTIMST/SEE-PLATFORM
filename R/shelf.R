@@ -70,6 +70,45 @@ best_fit_label <- function(fit, j) {
   as.character(bf[[j]])
 }
 
+# Experts sometimes enter 0–100 (percent) while the question is bounded 0–1.
+shelf_maybe_percent_to_unit <- function(vals, lo, hi) {
+  lo <- as.numeric(lo)
+  hi <- as.numeric(hi)
+  mx <- max(vals, na.rm = TRUE)
+  if (is.finite(hi) && hi <= 1.0001 && is.finite(mx) && mx > hi + 1e-9 && mx <= 100) {
+    return(vals / 100)
+  }
+  vals
+}
+
+# SHELF::fitdist requires values strictly inside (lower, upper) and increasing.
+shelf_interior_vals <- function(vals, lo, hi) {
+  span <- max(as.numeric(hi) - as.numeric(lo), 1e-9)
+  n <- nrow(vals)
+  eps <- span * 1e-4
+  lo_i <- as.numeric(lo) + eps
+  hi_i <- as.numeric(hi) - eps
+  if (lo_i >= hi_i) {
+    lo_i <- as.numeric(lo) + span * 1e-6
+    hi_i <- as.numeric(hi) - span * 1e-6
+  }
+  min_step <- min(eps, (hi_i - lo_i) / max(n + 1, 2))
+  out <- vals
+  for (j in seq_len(ncol(vals))) {
+    v <- as.numeric(vals[, j])
+    v[!is.finite(v)] <- (lo_i + hi_i) / 2
+    v <- pmin(pmax(v, lo_i), hi_i)
+    for (i in seq_len(n)) {
+      floor_i <- lo_i + (i - 1) * min_step
+      ceil_i <- hi_i - (n - i) * min_step
+      if (i > 1) floor_i <- max(floor_i, v[i - 1] + min_step)
+      v[i] <- min(max(v[i], floor_i), ceil_i)
+    }
+    out[, j] <- v
+  }
+  out
+}
+
 run_shelf_fit <- function(experts, lo = 0, hi = 1, probs = c(0.1, 0.5, 0.9), preferred = "best") {
   if (!shelf_available()) stop("Package SHELF is not installed")
   n_e <- length(experts)
@@ -88,7 +127,10 @@ run_shelf_fit <- function(experts, lo = 0, hi = 1, probs = c(0.1, 0.5, 0.9), pre
       vals[i, j] <- as.numeric(v)
     }
   }
-  colnames(vals) <- names_e
+  colnames(vals) <- make.unique(as.character(names_e), sep = " ")
+  names_e <- colnames(vals)
+  vals <- shelf_maybe_percent_to_unit(vals, lo, hi)
+  vals <- shelf_interior_vals(vals, lo, hi)
   fit <- SHELF::fitdist(
     vals = vals,
     probs = probs,
@@ -106,6 +148,8 @@ run_shelf_fit <- function(experts, lo = 0, hi = 1, probs = c(0.1, 0.5, 0.9), pre
     )
     list(
       name = names_e[j],
+      id = ex$id %||% names_e[j],
+      rationale = ex$rationale %||% "",
       bestFitting = best_raw,
       family = curves$family,
       quantiles = setNames(as.list(vals[, j]), as.character(probs)),
@@ -116,6 +160,7 @@ run_shelf_fit <- function(experts, lo = 0, hi = 1, probs = c(0.1, 0.5, 0.9), pre
   pool_vals <- apply(vals, 1, stats::median)
   pool_mat <- matrix(pool_vals, ncol = 1)
   colnames(pool_mat) <- "pool"
+  pool_mat <- shelf_interior_vals(pool_mat, lo, hi)
   pool_fit <- SHELF::fitdist(
     vals = pool_mat, probs = probs, lower = lo, upper = hi, expertnames = "pool"
   )
@@ -125,11 +170,28 @@ run_shelf_fit <- function(experts, lo = 0, hi = 1, probs = c(0.1, 0.5, 0.9), pre
     shelf_pdf_grid(pool_fit, 1, pool_id, lo, hi),
     error = function(e) shelf_pdf_grid(pool_fit, 1, "beta", lo, hi)
   )
+  d_arg <- if (preferred_id %in% c("best", "")) "best" else preferred_id
+  lp_dens <- tryCatch(
+    SHELF::linearPoolDensity(fit, xl = lo, xu = hi, d = d_arg, lpw = 1, nx = 81),
+    error = function(e) NULL
+  )
+  lp_q <- tryCatch(
+    as.numeric(SHELF::qlinearpool(fit, q = probs, d = d_arg, w = 1)),
+    error = function(e) apply(vals, 1, mean)
+  )
+  linear_pool <- list(
+    name = "Linear opinion pool",
+    family = d_arg,
+    quantiles = setNames(as.list(lp_q), as.character(probs)),
+    x = if (is.null(lp_dens)) pool_curves$x else as.numeric(lp_dens$x),
+    pdf = if (is.null(lp_dens)) pool_curves$pdf else as.numeric(lp_dens$f)
+  )
   list(
     engine = "shelf_native",
     shelfVersion = as.character(utils::packageVersion("SHELF")),
     lower = lo,
     upper = hi,
+    probs = probs,
     experts = expert_outs,
     pool = list(
       name = "Median pool",
@@ -137,28 +199,38 @@ run_shelf_fit <- function(experts, lo = 0, hi = 1, probs = c(0.1, 0.5, 0.9), pre
       quantiles = setNames(as.list(pool_vals), as.character(probs)),
       x = pool_curves$x,
       pdf = pool_curves$pdf
-    )
+    ),
+    linearPool = linear_pool
+  )
+}
+
+quantile_triple <- function(qlist, probs = c(0.1, 0.5, 0.9)) {
+  if (is.null(qlist) || !length(qlist)) return(c(NA_real_, NA_real_, NA_real_))
+  nms <- names(qlist)
+  if (is.null(nms)) nms <- as.character(probs)
+  v <- as.numeric(unlist(qlist, use.names = FALSE))
+  names(v) <- nms
+  c(
+    v[["0.1"]] %||% v[["0.25"]] %||% v[[1]],
+    v[["0.5"]] %||% v[[min(2, length(v))]],
+    v[["0.9"]] %||% v[["0.75"]] %||% v[[length(v)]]
   )
 }
 
 build_conclusion <- function(fit_result, question_title, n) {
-  pool_q <- fit_result$pool$quantiles
-  p10 <- pool_q[["0.1"]] %||% pool_q[[1]]
-  p50 <- pool_q[["0.5"]] %||% pool_q[[2]]
-  p90 <- pool_q[["0.9"]] %||% pool_q[[3]]
+  med <- quantile_triple(fit_result$pool$quantiles, fit_result$probs)
+  lop <- quantile_triple(fit_result$linearPool$quantiles, fit_result$probs)
   sprintf(
-    "SHELF group summary for “%s” (%d expert%s). Median pool P10 / P50 / P90 = %.3f / %.3f / %.3f (family: %s). Use this as workshop feedback; consensus may be adjusted after discussion.",
+    "SHELF group summary for “%s” (%d expert%s). Median pool = %.3f / %.3f / %.3f. Linear opinion pool (equal weights) = %.3f / %.3f / %.3f. Use as workshop feedback; consensus may be adjusted after discussion.",
     question_title,
     n,
     if (n == 1) "" else "s",
-    as.numeric(p10),
-    as.numeric(p50),
-    as.numeric(p90),
-    fit_result$pool$family %||% "beta"
+    med[[1]], med[[2]], med[[3]],
+    lop[[1]], lop[[2]], lop[[3]]
   )
 }
 
-shelf_plot_df <- function(fit_result) {
+shelf_plot_df <- function(fit_result, pool_view = "both") {
   rows <- list()
   add_series <- function(name, role, x, y) {
     if (is.null(x) || is.null(y)) return()
@@ -168,7 +240,37 @@ shelf_plot_df <- function(fit_result) {
     )
   }
   for (ex in fit_result$experts) add_series(ex$name, "expert", ex$x, ex$pdf)
-  add_series(fit_result$pool$name, "pool", fit_result$pool$x, fit_result$pool$pdf)
+  if (pool_view %in% c("both", "median") && !is.null(fit_result$pool)) {
+    add_series(fit_result$pool$name, "pool", fit_result$pool$x, fit_result$pool$pdf)
+  }
+  if (pool_view %in% c("both", "linear") && !is.null(fit_result$linearPool)) {
+    add_series(fit_result$linearPool$name, "pool", fit_result$linearPool$x, fit_result$linearPool$pdf)
+  }
   if (!length(rows)) return(NULL)
+  do.call(rbind, rows)
+}
+
+shelf_params_table <- function(fit_result) {
+  rows <- list()
+  add <- function(name, role, qlist, family, extra = "") {
+    trip <- quantile_triple(qlist, fit_result$probs)
+    rows[[length(rows) + 1]] <<- data.frame(
+      series = name,
+      role = role,
+      q_low = trip[[1]],
+      q_mid = trip[[2]],
+      q_high = trip[[3]],
+      family = family %||% "",
+      note = extra,
+      stringsAsFactors = FALSE
+    )
+  }
+  for (ex in fit_result$experts) {
+    add(ex$name, "expert", ex$quantiles, ex$family, ex$bestFitting %||% "")
+  }
+  if (!is.null(fit_result$pool)) add(fit_result$pool$name, "median_pool", fit_result$pool$quantiles, fit_result$pool$family)
+  if (!is.null(fit_result$linearPool)) {
+    add(fit_result$linearPool$name, "linear_pool", fit_result$linearPool$quantiles, fit_result$linearPool$family)
+  }
   do.call(rbind, rows)
 }
