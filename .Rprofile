@@ -1,0 +1,1 @@
+Sys.setenv(SHINY_SERVER_VERSION = "1.5.18")
