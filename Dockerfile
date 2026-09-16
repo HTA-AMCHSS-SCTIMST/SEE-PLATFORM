@@ -29,5 +29,5 @@ RUN R -e "if (!requireNamespace('mongolite', quietly = TRUE)) stop('mongolite fa
 # Expose the port Shiny runs on
 EXPOSE 3838
 
-# Start the app
-CMD ["R", "-e", "shiny::runApp('/app', host='0.0.0.0', port=3838)"]
+# Start the app with SHINY_SERVER_VERSION preset to bypass version check crash
+CMD ["R", "-e", "Sys.setenv(SHINY_SERVER_VERSION='1.5.18'); shiny::runApp('/app', host='0.0.0.0', port=3838)"]
