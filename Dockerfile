@@ -1,8 +1,7 @@
 # Use the stable R 4.4.0 image
 FROM rocker/shiny:4.4.0
 
-# Install ALL possible system dependencies for mongolite, openssl, and curl
-# We add libmongoc-dev and libbson-dev to be absolutely sure
+# Install essential system dependencies
 RUN apt-get update && apt-get install -y \
     libssl-dev \
     libcurl4-openssl-dev \
@@ -17,11 +16,14 @@ WORKDIR /app
 # Copy project files
 COPY . /app
 
-# 1. Install the packages
-RUN R -e "install.packages(c('mongolite', 'jsonlite', 'ggplot2', 'plotly', 'httr2', 'openssl', 'shiny'), repos='https://cloud.r-project.org', dependencies = TRUE)"
+# 0. Pin xfun to version 0.55 to bypass the 'attr' export conflict
+RUN R -e "install.packages('remotes', repos='https://packagemanager.posit.co/cran/__linux__/bookworm/latest')"
+RUN R -e "remotes::install_version('xfun', version='0.55', repos='https://packagemanager.posit.co/cran/__linux__/bookworm/latest')"
 
-# 2. VERIFICATION STEP: This will force the build to FAIL here if mongolite cannot be loaded.
-# This prevents the app from deploying if the installation is broken.
+# 1. Install the rest of the packages
+RUN R -e "install.packages(c('mongolite', 'jsonlite', 'ggplot2', 'plotly', 'httr2', 'openssl', 'shiny'), repos='https://packagemanager.posit.co/cran/__linux__/bookworm/latest', dependencies = TRUE)"
+
+# 2. VERIFICATION STEP: Forces the build to fail if mongolite isn't loaded correctly
 RUN R -e "if (!requireNamespace('mongolite', quietly = TRUE)) stop('mongolite failed to install correctly!')"
 
 # Expose the port Shiny runs on
