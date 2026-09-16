@@ -19,9 +19,55 @@ study_is_completed <- function(study) identical(study_status(study), "completed"
 can_provision_people <- function(user) is_admin(user)
 can_create_study <- function(user) is_facilitator(user)
 can_seed_demo <- function(user) is_facilitator(user)
-can_invite <- function(user) is_facilitator(user)
-can_advance_round <- function(user) is_facilitator(user)
-can_complete_study <- function(user) is_facilitator(user)
+can_invite <- function(user, study = NULL) {
+  is_facilitator(user) && (is.null(study) || can_manage_study(user, study))
+}
+can_advance_round <- function(user, study = NULL) {
+  is_facilitator(user) && (is.null(study) || can_manage_study(user, study))
+}
+can_complete_study <- function(user, study = NULL) {
+  is_facilitator(user) && (is.null(study) || can_manage_study(user, study))
+}
+
+can_manage_study <- function(user, study) {
+  is_admin(user) || (is_facilitator(user) && !is.null(study) &&
+    identical(as.character(study$ownerId %||% ""), as.character(user$id %||% "")))
+}
+
+require_study_manager <- function(user, study, action = "manage this study") {
+  require_role(can_manage_study(user, study), paste("You cannot", action, "because it is not assigned to you."))
+}
+
+remove_study_expert <- function(study, person_id, user) {
+  require_study_manager(user, study, "remove experts from this study")
+  access <- mongo_one("study_access", sprintf(
+    '{"studyId": %s, "personId": %s, "accessRole": "expert", "status": "active"}',
+    json_escape(doc_id(study)), json_escape(person_id)
+  ))
+  if (is.null(access)) stop("This expert is not assigned to the study.")
+  mongo_update("study_access", q_id(doc_id(access)), list(
+    status = "removed", updatedAt = iso_now(), removedBy = user$id
+  ))
+  invisible(TRUE)
+}
+
+archive_study <- function(study, user) {
+  require_study_manager(user, study, "archive this study")
+  mongo_update("studies", q_id(doc_id(study)), list(
+    status = "archived", updatedAt = iso_now(), archivedAt = iso_now(), archivedBy = user$id
+  ))
+  find_study(doc_id(study))
+}
+
+update_study_details <- function(study, title, description, user) {
+  require_study_manager(user, study, "edit this study")
+  title <- trimws(title %||% "")
+  if (!nzchar(title)) stop("Enter a study title.")
+  mongo_update("studies", q_id(doc_id(study)), list(
+    title = title, description = description %||% "", updatedAt = iso_now()
+  ))
+  find_study(doc_id(study))
+}
 
 can_run_shelf <- function(user, study = NULL) {
   if (!is_facilitator(user)) return(FALSE)
@@ -78,7 +124,7 @@ add_person <- function(name, email, person_type, affiliation = "", user) {
 }
 
 complete_study <- function(study, user) {
-  require_role(can_complete_study(user))
+  require_study_manager(user, study, "complete this study")
   mongo_update("studies", q_id(doc_id(study)), list(
     status = "completed",
     updatedAt = iso_now()

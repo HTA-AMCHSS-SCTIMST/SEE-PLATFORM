@@ -1,155 +1,69 @@
-# Expert Elicitation & Statistical Platform
+# Expert Elicitation Platform
 
-**SCTIMST · AMCHSS** — SHELF-style expert elicitation for HTA / clinical judgement.
+**SCTIMST · AMCHSS** (Achutha Menon Centre for Health Science Studies) — Sheffield Elicitation Framework (SHELF v4) platform for Health Technology Assessment (HTA) and clinical decision support.
 
-This repository is a **Shiny** app (`app.R`). Publish **this folder** to the institute **Posit Connect** server. Do not publish the older React / FastAPI project.
-
-Staff work at the app home page. Experts open a survey link of the form `/?study=<slug>`.
+This repository is a unified **R Shiny** web application (`app.R`) backed by **MongoDB** and the native **SHELF** statistical package.
 
 ---
 
-## Run on Posit Connect (institute)
+## Core Technology Stack
 
-This is the path for the manager / IT.
-
-### What you need
-
-1. A Posit Connect account (from institute IT).
-2. RStudio Desktop, with the institute Connect server already added  
-   (**Tools → Global Options → Publishing**).
-3. The MongoDB Atlas connection string — sent **separately**, never stored in this repo.
-4. IT must whitelist the **Posit server outbound IP** in Atlas → Network Access.
-
-### Publish from RStudio
-
-1. Clone this repository and open `elicitation.Rproj` in RStudio.
-2. Open `app.R`.
-3. Click the blue **Publish** icon → **Posit Connect**.
-4. Choose the institute Connect server.
-5. After the app appears, open that content → **Vars** and set:
-
-| Variable | Value |
-|----------|--------|
-| `MONGODB_URI` | Atlas URI (from the developer, not GitHub) |
-| `MONGODB_DB` | `expert_elicitation_shiny` |
-| `AUTH_DEV_MODE` | `false` |
-| `APP_ROLE` | `both` |
-| `SURVEY_PUBLIC_URL` | the Posit URL of **this same app** (see below) |
-
-6. Restart the content after saving Vars.
-7. **Access:** require login for staff. For expert survey links, either invite named Connect users, or allow Anyone and keep the invited-email gate in the app.
-
-`manifest.json` is included so Connect treats this as a Shiny app.
-
-### What `SURVEY_PUBLIC_URL` is
-
-After the first publish, Posit gives the app a public address, for example:
-
-```text
-https://posit.YOUR-INSTITUTE.edu/content/12ab34cd/
-```
-
-Paste **that address** (no `?study=...`) into `SURVEY_PUBLIC_URL`.
-
-The app then builds invite links such as:
-
-```text
-https://posit.YOUR-INSTITUTE.edu/content/12ab34cd/?study=hta-drug-a-vs-b
-```
-
-Until this variable is set, invite links still point at `http://127.0.0.1:3938`, which only works on a local laptop.
-
-### First check after publish
-
-1. Open the Posit URL while signed in (facilitator / admin).
-2. Click **Seed HTA demo**.
-3. Open the demo study and copy the survey URL.
-4. Open that URL (new window). Enter `priya.nair@hospital.org`.
-5. Dummy expert values are already seeded so you can open **Responses / SHELF** and click **Run SHELF**.
-
-### Logs
-
-Connect → this content → **Logs**. Dev role-picker login is off when `AUTH_DEV_MODE=false`.
-
-### Publish with an API key (optional)
-
-Ask IT for the Connect URL. Create a key: Connect → your name → **API Keys**. From this folder:
-
-```powershell
-$env:CONNECT_SERVER="https://posit.YOUR-INSTITUTE.edu"
-$env:CONNECT_API_KEY="paste-key-here"
-& "C:\Program Files\R\R-4.6.1\bin\Rscript.exe" deploy/connect.R
-```
-
-Never commit the API key.
+* **Application Framework:** R Shiny (`fluidPage` with dynamic routing via `app.R` and `R/app_server.R`).
+* **Persistence Tier:** MongoDB via `mongolite` (database: `expert_elicitation_shiny`), preserving nested JSON structures via cursor-based iteration (`iterate()`).
+* **Analytical Engine:** In-process CRAN `SHELF` package (`SHELF::fitdist`, linear opinion pools, and median pools).
+* **Visualizations:** `ggplot2` density curves rendered interactively via `plotly` (`ggplotly`).
+* **Hosting Options:** Local developer runner (`run_local.R`), Docker containerization (e.g., Render free tier), or enterprise deployment on **Posit Connect** (`manifest.json`).
 
 ---
 
-## Local run (developer laptop)
+## Application Modes & User Roles
 
-Use this only to try the app before Posit. Experts on the institute network will use the Posit URL, not `127.0.0.1`.
+Controlled by the `APP_ROLE` environment variable (`staff`, `survey`, or `both`):
 
-### 1. Install R (4.1 or newer) and RStudio
+* **Admin:** System oversight, directory management, and administrative provisioning.
+* **Facilitator / Study Manager:** Creates case studies, configures Quantities of Interest (QoIs), invites experts, manages round transitions, and executes SHELF analyses.
+* **Expert:** Completes secure, tokenized surveys (Chips-N-Bins or percentiles), submits written rationales, and participates in Round 2 peer review.
+* **Researcher / Student:** Role-based access to view assigned studies and historical consensus models.
 
-https://cloud.r-project.org/ · https://posit.co/download/rstudio-desktop/
+---
 
-### 2. Configure MongoDB
+## Local Run (Developer Laptop)
 
-Copy `.Renviron.example` → `.Renviron` in this folder. Do not commit `.Renviron`.
+### 1. Requirements
+* R (version 4.1 or newer) and RStudio / VS Code.
+* Local `mongod` instance or connection URI to a **MongoDB Atlas** cluster.
 
-**Atlas (usual):**
+### 2. Configuration
+Copy `.Renviron.example` to `.Renviron` in the project root (never commit `.Renviron`):
 
-```
-MONGODB_URI=mongodb+srv://USER:PASSWORD@YOUR-CLUSTER.mongodb.net
+```env
+MONGODB_URI=mongodb+srv://USER:PASSWORD@cluster.mongodb.net/?retryWrites=true&w=majority
 MONGODB_DB=expert_elicitation_shiny
 AUTH_DEV_MODE=true
 APP_ROLE=both
-SURVEY_PUBLIC_URL=http://127.0.0.1:3938
+SURVEY_PUBLIC_URL=[http://127.0.0.1:3938](http://127.0.0.1:3938)
+SESSION_TIMEOUT_MINUTES=30
 ```
 
-Use database name `expert_elicitation_shiny` so the older React app is not overwritten. Whitelist your laptop IP in Atlas.
+### Render + Auth0/OIDC
 
-**Or local MongoDB:** keep `MONGODB_URI=mongodb://127.0.0.1:27017` and run mongod / Docker.
+The Render deployment uses the Docker configuration and reads the assigned `PORT`.
+Copy the values from `render.yaml` into Render, then configure the OIDC application
+with:
 
-### 3. Start
+* **Application type:** Regular Web Application
+* **Allowed callback URL:** exactly `OIDC_REDIRECT_URI`
+* **Allowed logout URL:** exactly `SURVEY_PUBLIC_URL`
+* **Allowed web origins:** exactly `SURVEY_PUBLIC_URL`
 
-RStudio: open `elicitation.Rproj` → open `run_local.R` → Source.
+Set `OIDC_ISSUER` to the issuer URL (for Auth0, for example
+`https://your-tenant.us.auth0.com`), and generate a long random
+`OIDC_STATE_SECRET`. Set `AUTH_DEV_MODE=false`; the app also forces dev login off
+when OIDC is fully configured.
 
-Or:
+OIDC authenticates identity only. MongoDB remains the authorization source:
+staff must already exist in `users`, while invited experts must exist in `people`
+and have active `study_access`. Accounts that match neither record are rejected.
 
-```r
-setwd("D:/Projects/sct/rwebapp")
-source("run_local.R")
-```
-
-Browser: **http://127.0.0.1:3938**
-
-Sign in as Facilitator (`facilitator@sctimst.ac.in`) → **Seed HTA demo**.
-
-Local errors also append to `logs/shiny.log` (gitignored).
-
----
-
-## R packages
-
-Installed automatically on first local run / by Connect from `manifest.json`:
-
-`shiny`, `htmltools`, `mongolite`, `jsonlite`, `ggplot2`, `plotly`, `SHELF`
-
----
-
-## What this app does
-
-- Role login (admin, facilitator, researcher, expert, student)
-- Create a SHELF survey (chips-and-bins + P10 / P50 / P90)
-- Invite experts by email
-- Save judgements and run `SHELF::fitdist` with a pooled density chart
-- Seeded HTA demo study `hta-drug-a-vs-b` with dummy expert values for testing SHELF
-
----
-
-## Do not
-
-- Commit `.Renviron`, API keys, or Atlas passwords
-- Point `MONGODB_DB` at the live React database while both apps are in use
-- Publish any folder except this Shiny repository
+Before production, verify staff login, invited expert access, unauthorized-account
+rejection, logout, and the inactivity timeout in a non-production Render service.

@@ -81,6 +81,29 @@ shelf_maybe_percent_to_unit <- function(vals, lo, hi) {
   vals
 }
 
+shelf_validate_vals <- function(vals, lo, hi, names_e = NULL) {
+  if (!is.finite(lo) || !is.finite(hi) || !(lo < hi)) {
+    stop("Invalid plausible limits: the lower limit must be less than the upper limit.")
+  }
+  for (j in seq_len(ncol(vals))) {
+    v <- as.numeric(vals[, j])
+    label <- if (!is.null(names_e) && nzchar(names_e[[j]])) names_e[[j]] else paste0("Expert ", j)
+    if (any(!is.finite(v))) {
+      stop(sprintf("Missing or non-numeric quantile values for %s.", label))
+    }
+    if (any(v <= lo) || any(v >= hi)) {
+      stop(sprintf(
+        "Quantile values for %s must be strictly between %.6g and %.6g.",
+        label, lo, hi
+      ))
+    }
+    if (any(diff(v) <= 0)) {
+      stop(sprintf("Quantiles for %s must be strictly increasing.", label))
+    }
+  }
+  invisible(TRUE)
+}
+
 # SHELF::fitdist requires values strictly inside (lower, upper) and increasing.
 shelf_interior_vals <- function(vals, lo, hi) {
   span <- max(as.numeric(hi) - as.numeric(lo), 1e-9)
@@ -130,6 +153,7 @@ run_shelf_fit <- function(experts, lo = 0, hi = 1, probs = c(0.1, 0.5, 0.9), pre
   colnames(vals) <- make.unique(as.character(names_e), sep = " ")
   names_e <- colnames(vals)
   vals <- shelf_maybe_percent_to_unit(vals, lo, hi)
+  shelf_validate_vals(vals, lo, hi, names_e)
   vals <- shelf_interior_vals(vals, lo, hi)
   fit <- SHELF::fitdist(
     vals = vals,
@@ -141,7 +165,7 @@ run_shelf_fit <- function(experts, lo = 0, hi = 1, probs = c(0.1, 0.5, 0.9), pre
   preferred_id <- shelf_family_id(preferred)
   expert_outs <- lapply(seq_len(n_e), function(j) {
     best_raw <- best_fit_label(fit, j)
-    selected <- if (preferred_id %in% c("best", "")) shelf_family_id(best_raw) else preferred_id
+    selected <- shelf_family_id(best_raw)
     curves <- tryCatch(
       shelf_pdf_grid(fit, j, selected, lo, hi),
       error = function(e) shelf_pdf_grid(fit, j, "beta", lo, hi)
@@ -180,8 +204,10 @@ run_shelf_fit <- function(experts, lo = 0, hi = 1, probs = c(0.1, 0.5, 0.9), pre
     error = function(e) apply(vals, 1, mean)
   )
   linear_pool <- list(
-    name = "Linear opinion pool",
+    name = "linearPool Fit",
     family = d_arg,
+    bestFitting = if (preferred_id %in% c("best", "")) pool_best else preferred_id,
+    shelfBestFitting = pool_best,
     quantiles = setNames(as.list(lp_q), as.character(probs)),
     x = if (is.null(lp_dens)) pool_curves$x else as.numeric(lp_dens$x),
     pdf = if (is.null(lp_dens)) pool_curves$pdf else as.numeric(lp_dens$f)
@@ -196,6 +222,8 @@ run_shelf_fit <- function(experts, lo = 0, hi = 1, probs = c(0.1, 0.5, 0.9), pre
     pool = list(
       name = "Median pool",
       family = pool_curves$family,
+      bestFitting = if (preferred_id %in% c("best", "")) pool_best else preferred_id,
+      shelfBestFitting = pool_best,
       quantiles = setNames(as.list(pool_vals), as.character(probs)),
       x = pool_curves$x,
       pdf = pool_curves$pdf
@@ -221,7 +249,7 @@ build_conclusion <- function(fit_result, question_title, n) {
   med <- quantile_triple(fit_result$pool$quantiles, fit_result$probs)
   lop <- quantile_triple(fit_result$linearPool$quantiles, fit_result$probs)
   sprintf(
-    "SHELF group summary for “%s” (%d expert%s). Median pool = %.3f / %.3f / %.3f. Linear opinion pool (equal weights) = %.3f / %.3f / %.3f. Use as workshop feedback; consensus may be adjusted after discussion.",
+    "SHELF group summary for “%s” (%d expert%s). Median pool = %.2f / %.2f / %.2f. linearPool Fit (equal weights) = %.2f / %.2f / %.2f. Use as workshop feedback; consensus may be adjusted after discussion.",
     question_title,
     n,
     if (n == 1) "" else "s",
@@ -268,9 +296,17 @@ shelf_params_table <- function(fit_result) {
   for (ex in fit_result$experts) {
     add(ex$name, "expert", ex$quantiles, ex$family, ex$bestFitting %||% "")
   }
-  if (!is.null(fit_result$pool)) add(fit_result$pool$name, "median_pool", fit_result$pool$quantiles, fit_result$pool$family)
+  if (!is.null(fit_result$pool)) {
+    add(
+      fit_result$pool$name, "median_pool", fit_result$pool$quantiles,
+      fit_result$pool$family, fit_result$pool$bestFitting %||% ""
+    )
+  }
   if (!is.null(fit_result$linearPool)) {
-    add(fit_result$linearPool$name, "linear_pool", fit_result$linearPool$quantiles, fit_result$linearPool$family)
+    add(
+      fit_result$linearPool$name, "linear_pool", fit_result$linearPool$quantiles,
+      fit_result$linearPool$family, fit_result$linearPool$bestFitting %||% ""
+    )
   }
   do.call(rbind, rows)
 }

@@ -1,0 +1,106 @@
+---
+title: "Structured Expert Elicitation - SHELF Report"
+format:
+  html:
+    toc: true
+    code-fold: true
+  pdf: default
+params:
+  study_id: ""
+  question_id: ""
+  round_number: 1
+  anonymize: true
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+required <- c("mongolite", "jsonlite", "ggplot2", "SHELF", "knitr")
+missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]
+if (length(missing)) {
+  stop("Install required packages first: ", paste(missing, collapse = ", "))
+}
+
+root <- normalizePath("..", mustWork = TRUE)
+setwd(root)
+readRenviron(".Renviron")
+
+r_files <- c(
+  "config.R", "log.R", "ids.R", "mongo.R", "auth.R", "access.R",
+  "tokens.R", "onboarding.R", "comments.R", "chips.R", "shelf.R",
+  "studies.R", "reports.R", "survey_ui.R"
+)
+for (file in r_files) source(file.path("R", file), local = FALSE)
+
+study <- find_study(params$study_id)
+if (is.null(study)) stop("Study not found: ", params$study_id)
+questions <- study_questions(doc_id(study))
+question <- if (nzchar(params$question_id)) {
+  matches <- Filter(function(q) identical(doc_id(q), params$question_id), questions)
+  if (length(matches)) matches[[1]] else NULL
+} else {
+  primary_question(questions)
+}
+if (is.null(question)) stop("Question not found for this study.")
+
+aggregation <- latest_aggregation(
+  doc_id(study), doc_id(question), as.integer(params$round_number)
+)
+result <- aggregation_as_shelf_result(aggregation)
+if (is.null(result)) stop("No SHELF aggregation is available for this study and round.")
+params_table <- audit_params_df(result)
+```
+
+## Study
+
+**Study:** `r study$title %||% ""`
+**Question:** `r question$title %||% question$code`
+**Round:** `r as.integer(params$round_number)`
+**Generated:** `r iso_now()`
+
+## Group summary
+
+`r result$conclusion %||% "No conclusion was stored."`
+
+## Parameter table
+
+```{r}
+display <- params_table
+names(display) <- c(
+  "Expert / result", "Role", "Lower quantile", "Median quantile",
+  "Upper quantile", "Distribution", "Best fit from SHELF"
+)
+numeric_cols <- c("Lower quantile", "Median quantile", "Upper quantile")
+display[numeric_cols] <- lapply(display[numeric_cols], function(x) {
+  formatC(as.numeric(x), format = "fg", digits = 6, flag = "#")
+})
+knitr::kable(display, caption = "SHELF fitted quantiles")
+```
+
+## Density chart
+
+```{r}
+fit <- result$fit
+plot_data <- shelf_plot_df(fit, "both")
+if (is.null(plot_data)) {
+  cat("No density data is available.")
+} else {
+  ggplot2::ggplot(
+    plot_data,
+    ggplot2::aes(x = x, y = pdf, colour = name, linetype = role, group = name)
+  ) +
+    ggplot2::geom_line(linewidth = 0.8) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::labs(
+      x = "Value", y = "Density",
+      colour = "Expert / result", linetype = "Role"
+    )
+}
+```
+
+## Notes
+
+This report uses the stored aggregation from the Shiny platform. Expert labels
+remain blinded when the stored SHELF result was anonymized.

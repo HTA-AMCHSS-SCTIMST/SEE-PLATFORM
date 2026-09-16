@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: expert-elicitation-shiny
+    runtime: docker
+    healthCheckPath: /
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB
+        value: expert_elicitation_shiny
+      - key: AUTH_DEV_MODE
+        value: "false"
+      - key: APP_ROLE
+        value: both
+      - key: SURVEY_PUBLIC_URL
+        sync: false
+      - key: SESSION_TIMEOUT_MINUTES
+        value: "30"
+      - key: OIDC_ISSUER
+        sync: false
+      - key: OIDC_CLIENT_ID
+        sync: false
+      - key: OIDC_CLIENT_SECRET
+        sync: false
+      - key: OIDC_REDIRECT_URI
+        sync: false
+      - key: OIDC_STATE_SECRET
+        sync: false
+      - key: OIDC_SCOPE
+        value: openid profile email

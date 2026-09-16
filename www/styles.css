@@ -1,5 +1,5 @@
 :root {
-  --gold: #b8892d;
+  --gold: #86651f;
   --gold-soft: #f7f0e0;
   --ink: #1b2430;
   --ink-muted: #4a5563;
@@ -45,6 +45,8 @@ code { background: var(--gold-soft); padding: 0.1rem 0.35rem; }
 .brand-text h1 { font-size: 2rem; letter-spacing: 0.03em; line-height: 1.15; }
 .institute, .team { margin: 0.15rem 0 0; font-size: 1.12rem; }
 .team { color: var(--gold); font-weight: 700; }
+.team a { color: inherit; text-decoration: underline; text-decoration-thickness: 0.1em; text-underline-offset: 0.15em; }
+.team a:hover { color: #5d4514; }
 .header-actions { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 .user-chip { text-align: right; font-size: 1.05rem; line-height: 1.35; }
 .user-chip strong { display: block; font-size: 1.2rem; }
@@ -91,6 +93,10 @@ code { background: var(--gold-soft); padding: 0.1rem 0.35rem; }
 .btn-secondary, button.btn-secondary { background: #fff; color: var(--ink); }
 .btn-ghost, button.btn-ghost { background: transparent; border-color: transparent; color: var(--ink); }
 .btn-row { display: flex; gap: 0.5rem; margin-top: 0.8rem; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 3px solid #1d5f8a;
+  outline-offset: 2px;
+}
 
 input[type="text"], input[type="number"], textarea, select {
   width: 100%;
@@ -99,6 +105,8 @@ input[type="text"], input[type="number"], textarea, select {
   border: 1px solid var(--line);
   margin-bottom: 0.5rem;
 }
+.shiny-input-radiogroup label { margin-right: 1rem; cursor: pointer; }
+.shiny-input-radiogroup input[type="radio"] { width: auto; margin-right: 0.35rem; }
 
 .login-page {
   min-height: 100vh;
@@ -120,6 +128,21 @@ input[type="text"], input[type="number"], textarea, select {
 
 table.data { width: 100%; border-collapse: collapse; font-size: 1rem; }
 table.data th, table.data td { border-bottom: 1px solid var(--line); padding: 0.4rem 0.35rem; text-align: left; }
+.table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.parameter-panel table { width: 100%; min-width: 720px; border-collapse: collapse; }
+.parameter-panel th {
+  background: var(--gold-soft);
+  color: var(--ink);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.parameter-panel th, .parameter-panel td { padding: 0.55rem 0.65rem; border: 1px solid var(--line); text-align: left; }
+.parameter-panel th:first-child, .parameter-panel td:first-child { min-width: 12rem; white-space: nowrap; }
+.parameter-panel tbody tr:nth-child(even) { background: #fffaf0; }
+.parameter-panel td:nth-child(3), .parameter-panel td:nth-child(4), .parameter-panel td:nth-child(5) {
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
 
 .url-box {
   font-family: ui-monospace, Consolas, monospace;
@@ -137,8 +160,27 @@ table.data th, table.data td { border-bottom: 1px solid var(--line); padding: 0.
 .survey-nav .nav-item.active { border-left-color: var(--gold); background: var(--gold-soft); }
 .survey-nav .nav-item span { display: block; font-size: 0.8rem; }
 
+@media (max-width: 600px) {
+  body { font-size: 16px; }
+  .header-inner { padding: 0.8rem 1rem; align-items: flex-start; }
+  .brand-logo { width: 58px; height: 58px; }
+  .brand-text h1 { font-size: 1.45rem; }
+  .institute, .team { font-size: 0.95rem; }
+  .header-actions { width: 100%; margin-left: 0; justify-content: flex-start; }
+  .user-chip { text-align: left; width: 100%; }
+  .page-body, .survey-shell { padding: 0.8rem; }
+  .page-head, .study-card-top { flex-direction: column; }
+  .btn-row { flex-wrap: wrap; }
+  .btn-row > button, .btn-row > a { flex: 1 1 12rem; }
+  .panel { padding: 0.9rem; }
+  .chip-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .progress-track { margin-left: 0; margin-right: 0; }
+  .login-page { padding: 1rem; align-items: flex-start; padding-top: 2rem; }
+}
+
 .chip-bounds { margin-bottom: 0.8rem; }
 .chip-status { display: flex; justify-content: space-between; margin: 0.4rem 0 0.8rem; }
+.chip-live-summary { display: block; color: var(--gold); margin-top: 0.2rem; }
 .chip-grid {
   display: grid;
   grid-template-columns: repeat(10, minmax(0, 1fr));
@@ -149,5 +191,28 @@ table.data th, table.data td { border-bottom: 1px solid var(--line); padding: 0.
 .chip-bin { text-align: center; }
 .chip-stack { min-height: 80px; display: flex; flex-direction: column-reverse; align-items: center; gap: 2px; }
 .chip-dot { width: 14px; height: 10px; background: var(--gold); border: 1px solid #8a6a22; }
-.chip-btn { width: 100%; padding: 0.15rem; font-size: 0.9rem; border: 1px solid var(--line); background: #fff; cursor: pointer; }
+.chip-btn {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.25rem;
+  font-size: 1.1rem;
+  border: 1px solid var(--line);
+  background: #fff;
+  cursor: pointer;
+  touch-action: manipulation;
+}
 .chip-btn.add { border-color: var(--gold); }
+@media (max-width: 600px) {
+  .chip-grid {
+    grid-template-columns: repeat(5, minmax(4.2rem, 1fr));
+    gap: 0.55rem;
+    overflow-x: auto;
+    padding: 0.2rem 0.1rem 0.75rem;
+    scroll-snap-type: x proximity;
+  }
+  .chip-bin { min-width: 4.2rem; scroll-snap-align: start; }
+  .chip-stack { min-height: 5rem; }
+  .chip-dot { width: 1.35rem; height: 0.9rem; }
+  .chip-status { align-items: flex-start; gap: 0.6rem; }
+  .chip-status > span { white-space: nowrap; }
+}

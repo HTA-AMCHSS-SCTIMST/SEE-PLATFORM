@@ -3,9 +3,17 @@ mod_chips_ui <- function(id, bin_count = 10L) {
   cols <- lapply(seq_len(bin_count), function(i) {
     shiny::div(
       class = "chip-bin",
-      shiny::actionButton(ns(paste0("add_", i)), "+", class = "chip-btn add"),
+      shiny::actionButton(
+        ns(paste0("add_", i)), "+", class = "chip-btn add",
+        title = sprintf("Add a chip to bin %s", i),
+        `aria-label` = sprintf("Add a chip to bin %s", i)
+      ),
       shiny::uiOutput(ns(paste0("stack_", i))),
-      shiny::actionButton(ns(paste0("rm_", i)), intToUtf8(8722), class = "chip-btn rm"),
+      shiny::actionButton(
+        ns(paste0("rm_", i)), intToUtf8(8722), class = "chip-btn rm",
+        title = sprintf("Remove a chip from bin %s", i),
+        `aria-label` = sprintf("Remove a chip from bin %s", i)
+      ),
       shiny::uiOutput(ns(paste0("lab_", i)))
     )
   })
@@ -82,9 +90,18 @@ mod_chips_server <- function(id, bin_count = 10L, total_chips = 20L, lo0 = 0, hi
     output$status <- shiny::renderUI({
       placed <- sum(chips())
       rem <- total_chips - placed
+      q <- chips_to_quantiles(bins())
       shiny::div(
         class = "chip-status",
-        shiny::span(HTML(sprintf("Step 2 — Place chips: <strong>%s</strong> / %s", placed, total_chips))),
+        shiny::div(
+          HTML(sprintf("Step 2 — Place chips: <strong>%s</strong> / %s", placed, total_chips)),
+          if (!is.null(q)) {
+            shiny::tags$small(
+              class = "chip-live-summary",
+              sprintf("Live P10 / P50 / P90: %.3f / %.3f / %.3f", q[["0.1"]], q[["0.5"]], q[["0.9"]])
+            )
+          }
+        ),
         shiny::span(class = if (rem == 0) "ok" else "muted", sprintf("Remaining: %s", rem))
       )
     })

@@ -24,7 +24,7 @@ for (f in r_files) {
   source(file.path(r_dir, f), local = FALSE)
 }
 
-needed <- c("shiny", "htmltools", "mongolite", "jsonlite", "ggplot2", "plotly")
+needed <- c("shiny", "htmltools", "mongolite", "jsonlite", "ggplot2", "plotly", "httr2", "openssl")
 missing <- needed[!vapply(needed, requireNamespace, logical(1), quietly = TRUE)]
 if (length(missing)) {
   stop(

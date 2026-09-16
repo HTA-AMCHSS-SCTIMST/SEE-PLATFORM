@@ -6,12 +6,21 @@ ee_header <- function(user = NULL, extra = NULL) {
       htmltools::tags$img(src = "srlogo.jpg", alt = "SCTIMST", class = "brand-logo"),
       htmltools::div(
         class = "brand-text",
-        htmltools::tags$h1("EXPERT ELICITATION & STATISTICAL PLATFORM"),
+        htmltools::tags$h1("STRUCTURED EXPERT ELICITATION-AMCHSS"),
         htmltools::tags$p(
           class = "institute",
           "Sree Chitra Tirunal Institute for Medical Sciences & Technology, Trivandrum"
         ),
-        htmltools::tags$p(class = "team", "Achutha Menon Centre for Health Science Studies (AMCHSS)")
+        htmltools::tags$p(
+          class = "team",
+          htmltools::tags$a(
+            href = "https://hta-amchss-sctimst.github.io/RRC/",
+            target = "_blank",
+            rel = "noopener noreferrer",
+            aria_label = "Achutha Menon Centre for Health Science Studies website",
+            "Achutha Menon Centre for Health Science Studies (AMCHSS)"
+          )
+        )
       ),
       if (!is.null(user)) {
         htmltools::div(

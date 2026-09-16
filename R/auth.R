@@ -119,10 +119,68 @@ connect_login <- function(username) {
   find_user_by_email(email)
 }
 
+oidc_login <- function(code) {
+  discovery <- ee_oidc_discovery()
+  token <- httr2::request(discovery$token_endpoint) |>
+    httr2::req_body_form(
+      grant_type = "authorization_code",
+      code = code,
+      client_id = ee_env("OIDC_CLIENT_ID"),
+      client_secret = ee_env("OIDC_CLIENT_SECRET"),
+      redirect_uri = ee_oidc_callback_url()
+    ) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json()
+  access_token <- token$access_token %||% ""
+  if (!nzchar(access_token)) stop("OIDC provider did not return an access token.", call. = FALSE)
+  identity <- httr2::request(discovery$userinfo_endpoint) |>
+    httr2::req_headers(Authorization = paste("Bearer", access_token)) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json()
+  email <- tolower(trimws(identity$email %||% ""))
+  if (!nzchar(email) || !isTRUE(identity$email_verified %||% FALSE)) {
+    stop("The OIDC provider did not verify an email address.", call. = FALSE)
+  }
+  existing <- find_user_by_email(email)
+  person <- find_person_by_email(email)
+  if (is.null(existing) && is.null(person)) {
+    stop("This account is not authorized for the platform.", call. = FALSE)
+  }
+  if (is.null(existing)) {
+    now <- iso_now()
+    existing <- mongo_insert("users", list(
+      email = email,
+      displayName = identity$name %||% identity$preferred_username %||% email,
+      authProvider = "oidc",
+      platformRole = person$personType %||% "expert",
+      orgId = person$orgId,
+      personId = doc_id(person),
+      isActive = TRUE,
+      lastLoginAt = now,
+      createdAt = now,
+      updatedAt = now
+    ))
+  } else if (!isTRUE(existing$isActive %||% FALSE)) {
+    stop("This account is inactive.", call. = FALSE)
+  }
+  mongo_update("users", q_id(doc_id(existing)), list(
+    displayName = identity$name %||% existing$displayName %||% email,
+    lastLoginAt = iso_now(),
+    updatedAt = iso_now(),
+    authProvider = "oidc",
+    isActive = TRUE
+  ))
+  link_person_to_user(doc_id(existing), email)
+  find_user_by_email(email)
+}
+
 survey_entry <- function(study_id_or_slug, email) {
   email <- tolower(trimws(email))
   study <- find_study(study_id_or_slug)
   if (is.null(study)) stop("Case study not found")
+  if (identical(study$status %||% "", "archived")) {
+    stop("This survey has been archived and no longer accepts responses.")
+  }
   person <- find_person_by_email(email)
   if (is.null(person)) {
     stop("This email is not invited. Ask the facilitator to add your email.")

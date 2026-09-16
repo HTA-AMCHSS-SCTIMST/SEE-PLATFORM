@@ -55,6 +55,23 @@ staff_dash_ui <- function(rv) {
       shiny::textInput("new_title", "Title", placeholder = "HTA: Drug A vs Drug B"),
       shiny::textInput("new_qty", "Quantity of interest", placeholder = "5-year progression-free probability"),
       shiny::textAreaInput("new_desc", "Why this elicitation?", rows = 3),
+      shiny::selectInput(
+        "new_variable_type", "Variable type",
+        choices = c("Proportion / probability" = "proportion", "Continuous" = "continuous", "Count" = "count"),
+        selected = "proportion"
+      ),
+      shiny::textInput("new_unit", "Unit", value = "probability", placeholder = "INR, years, cases, etc."),
+      shiny::fluidRow(
+        shiny::column(4, shiny::numericInput("new_lower", "Lower plausible bound", value = 0, step = 0.01)),
+        shiny::column(4, shiny::numericInput("new_upper", "Upper plausible bound", value = 1, step = 0.01)),
+        shiny::column(4, shiny::numericInput("new_precision", "Decimal places", value = 2, min = 0, max = 6, step = 1))
+      ),
+      shiny::selectInput(
+        "new_distribution", "Preferred distribution",
+        choices = c("Best fitting" = "best", "Beta" = "beta", "Normal" = "normal",
+                    "Gamma" = "gamma", "Log-normal" = "log_normal"),
+        selected = "best"
+      ),
       shiny::checkboxGroupInput(
         "new_methods", "Methods",
         choiceNames = c("Chips-N-Bins", "Low-High-Best (P10/P50/P90)"),
@@ -105,7 +122,8 @@ staff_study_ui <- function(rv) {
       htmltools::tags$thead(htmltools::tags$tr(
         htmltools::tags$th("Name"), htmltools::tags$th("Email"),
         htmltools::tags$th("Progress"), htmltools::tags$th("Status"),
-        if (can_invite(user)) htmltools::tags$th("Invite link")
+        if (can_invite(user, st)) htmltools::tags$th("Invite link"),
+        if (can_manage_study(user, st)) htmltools::tags$th("Actions")
       )),
       htmltools::tags$tbody(lapply(experts, function(ex) {
         htmltools::tags$tr(
@@ -113,7 +131,18 @@ staff_study_ui <- function(rv) {
           htmltools::tags$td(ex$email),
           htmltools::tags$td(sprintf("%s / %s", ex$answeredCount, ex$totalQuestions)),
           htmltools::tags$td(status_pill(ex$status)),
-          if (can_invite(user)) htmltools::tags$td(htmltools::tags$code(ex$surveyUrl %||% ""))
+          if (can_invite(user, st)) htmltools::tags$td(htmltools::tags$code(ex$surveyUrl %||% "")),
+          if (can_manage_study(user, st)) htmltools::tags$td(
+            shiny::actionButton(
+              paste0("remove_expert_", ex$personId),
+              "Remove",
+              class = "btn-secondary",
+              onclick = sprintf(
+                "Shiny.setInputValue('remove_expert', '%s', {priority: 'event'})",
+                ex$personId
+              )
+            )
+          )
         )
       }))
     )
@@ -125,7 +154,7 @@ staff_study_ui <- function(rv) {
   } else {
     NULL
   }
-  invite_panel <- if (can_invite(user)) {
+  invite_panel <- if (can_invite(user, st)) {
     shiny::div(
       class = "panel",
       htmltools::tags$h3("Invite expert"),
@@ -133,8 +162,8 @@ staff_study_ui <- function(rv) {
       shiny::textInput("invite_name", "Name (optional)"),
       shiny::actionButton("invite_go", "Add expert", class = "btn-primary"),
       htmltools::hr(),
-      if (can_advance_round(user)) shiny::actionButton("advance_round", "Advance to next round", class = "btn-secondary"),
-      if (can_complete_study(user)) shiny::actionButton("complete_study", "Mark elicitation complete", class = "btn-secondary")
+      if (can_advance_round(user, st)) shiny::actionButton("advance_round", "Advance to next round", class = "btn-secondary"),
+      if (can_complete_study(user, st)) shiny::actionButton("complete_study", "Mark elicitation complete", class = "btn-secondary")
     )
   } else {
     shiny::div(class = "panel", htmltools::tags$h3("Access"), htmltools::tags$p(class = "muted", "Read-only."))
@@ -148,7 +177,17 @@ staff_study_ui <- function(rv) {
         status_pill(st$status),
         htmltools::span(class = "pill", sprintf("Round %s", current_round(st)))
       ),
-      shelf_btn
+      shiny::tagList(
+        shelf_btn,
+        if (can_manage_study(user, st)) shiny::actionButton("archive_study", "Archive survey", class = "btn-secondary")
+      )
+    ),
+    if (can_manage_study(user, st)) shiny::div(
+      class = "panel",
+      htmltools::tags$h3("Edit survey"),
+      shiny::textInput("edit_title", "Title", value = st$title %||% ""),
+      shiny::textAreaInput("edit_description", "Description", value = st$description %||% "", rows = 3),
+      shiny::actionButton("save_study_details", "Save survey details", class = "btn-primary")
     ),
     notice(rv$msg, "ok"),
     notice(rv$err, "error"),
@@ -188,8 +227,15 @@ staff_responses_ui <- function(rv) {
       htmltools::tags$p(class = "ok", rv$shelf_result$conclusion),
       plotly::plotlyOutput("shelf_plot", height = "420px"),
       if (is.data.frame(rv$shelf_result$params)) {
-        shiny::div(class = "panel", htmltools::tags$h3("Parameter table"),
-                   shiny::tableOutput("shelf_params"))
+        shiny::div(
+          class = "panel parameter-panel",
+          htmltools::tags$h3("Parameter table"),
+          htmltools::tags$p(
+            class = "muted",
+            "Estimated lower, median, and upper elicited values for each expert and pooled result."
+          ),
+          shiny::div(class = "table-responsive", shiny::tableOutput("shelf_params"))
+        )
       },
       if (length(comments)) {
         mapping <- blind_labels_for_ids(vapply(comments, function(c) as.character(c$authorPersonId), character(1)))
@@ -204,11 +250,16 @@ staff_responses_ui <- function(rv) {
     )
   }
   run_controls <- if (can_run_shelf(user, st)) {
+    preferred_distribution <- (st$protocolConfig %||% list())$preferredDistribution %||% "best"
     shiny::tagList(
       shiny::selectInput(
-        "fit_family", "Fit family",
-        choices = c("Best fitting" = "best", "Beta" = "beta", "Normal" = "normal", "Gamma" = "gamma", "Log normal" = "log_normal"),
-        selected = "best"
+        "fit_family", "Distribution override",
+        choices = c("Best fitting (SHELF)" = "best", "Beta" = "beta", "Normal" = "normal", "Gamma" = "gamma", "Log normal" = "log_normal"),
+        selected = preferred_distribution
+      ),
+      htmltools::tags$p(
+        class = "muted",
+        "Expert distributions always use SHELF best fits. Choose another family only to override the pooled result."
       ),
       shiny::actionButton("run_shelf", "Run SHELF → charts", class = "btn-primary")
     )
@@ -219,7 +270,7 @@ staff_responses_ui <- function(rv) {
     shiny::div(
       class = "btn-row",
       shiny::downloadButton("dl_csv", "Download CSV"),
-      shiny::downloadButton("dl_pdf", "Download PDF audit")
+      shiny::downloadButton("dl_pdf", "Download complete PDF")
     )
   } else {
     NULL
@@ -233,10 +284,12 @@ staff_responses_ui <- function(rv) {
     shiny::div(
       class = "panel",
       shiny::selectInput("resp_question", "Question", choices = choices),
-      shiny::selectInput(
+      shiny::radioButtons(
         "pool_view", "Pool overlay",
-        choices = c("Median and linear pool" = "both", "Median pool" = "median", "Linear opinion pool" = "linear"),
-        selected = "both"
+        choiceNames = c("Median and linearPool Fit", "Median pool", "linearPool Fit"),
+        choiceValues = c("both", "median", "linear"),
+        selected = "both",
+        inline = TRUE
       ),
       run_controls,
       export_ui,
@@ -284,7 +337,8 @@ staff_people_ui <- function(rv) {
           choices = c("Facilitator" = "facilitator", "Researcher" = "researcher",
                       "Student" = "student", "Expert" = "expert")
         ),
-        shiny::actionButton("person_add", "Save", class = "btn-primary")
+        shiny::actionButton("person_add", "Save", class = "btn-primary"),
+        htmltools::tags$p(class = "muted", "Only administrators manage the organization-wide directory. Facilitators manage experts within their own surveys.")
       )
     )
   ))

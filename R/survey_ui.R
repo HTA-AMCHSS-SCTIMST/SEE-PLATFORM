@@ -30,6 +30,7 @@ survey_pages <- function(study, questions) {
 }
 
 survey_root_ui <- function(input, rv, study_key, ping, token_key = "") {
+  rv$review_refresh
   if (!isTRUE(ping$ok)) {
     return(shiny::div(class = "login-page", shiny::div(class = "login-card",
       htmltools::tags$h1("MongoDB not connected"), htmltools::tags$p(ping$message)
@@ -115,17 +116,19 @@ survey_root_ui <- function(input, rv, study_key, ping, token_key = "") {
     ),
     review = survey_review_body(rv, pg),
     bounds = shiny::tagList(
-      htmltools::tags$h2("Plausible bounds first"),
-      htmltools::tags$p("Give the lowest (L) and highest (U) values you judge plausible before seeing chips or percentiles. This reduces anchoring."),
-      shiny::fluidRow(
-        shiny::column(6, shiny::numericInput("bound_lo", "Lower plausible limit (L)", value = lo0, step = 0.01)),
-        shiny::column(6, shiny::numericInput("bound_hi", "Upper plausible limit (U)", value = hi0, step = 0.01))
+      htmltools::tags$h2("Facilitator-defined plausible bounds"),
+      htmltools::tags$p(
+        "The facilitator set these limits before inviting experts. Keep all judgments strictly within this range."
+      ),
+      htmltools::tags$p(
+        class = "muted",
+        sprintf("Lower limit (L): %s · Upper limit (U): %s", lo0, hi0)
       ),
       notice(rv$err, "error"),
       shiny::div(
         class = "btn-row",
         shiny::actionButton("survey_prev", "Back"),
-        shiny::actionButton("save_bounds", "Save bounds", class = "btn-primary")
+        shiny::actionButton("survey_next", "Continue", class = "btn-primary")
       )
     ),
     chips = shiny::tagList(
@@ -153,9 +156,9 @@ survey_root_ui <- function(input, rv, study_key, ping, token_key = "") {
         inline = TRUE
       ),
       shiny::fluidRow(
-        shiny::column(4, shiny::numericInput("p10", "P10 / Q1", value = NA, step = 0.01)),
-        shiny::column(4, shiny::numericInput("p50", "P50 / median", value = NA, step = 0.01)),
-        shiny::column(4, shiny::numericInput("p90", "P90 / Q3", value = NA, step = 0.01))
+        shiny::column(4, shiny::numericInput("p10", "P10 / Q1", value = NA, min = lo0, max = hi0, step = 0.01)),
+        shiny::column(4, shiny::numericInput("p50", "P50 / median", value = NA, min = lo0, max = hi0, step = 0.01)),
+        shiny::column(4, shiny::numericInput("p90", "P90 / Q3", value = NA, min = lo0, max = hi0, step = 0.01))
       ),
       shiny::textAreaInput("q_rationale", "Rationale (required)", rows = 3),
       notice(rv$err, "error"),
@@ -210,6 +213,13 @@ survey_review_body <- function(rv, pg) {
   shiny::tagList(
     htmltools::tags$h2("Blinded peer review"),
     htmltools::tags$p("Individual distributions are labelled Expert A, B, C. Comment on the evidence, not on people."),
+    if (!is.null(rv$review_updated_at)) {
+      htmltools::tags$p(
+        class = "muted live-feedback-status",
+        sprintf("Live feedback updates automatically · last distribution update %s",
+                format(rv$review_updated_at, "%H:%M:%S"))
+      )
+    },
     fit_ui,
     notice(rv$err, "error"),
     notice(rv$msg, "ok"),

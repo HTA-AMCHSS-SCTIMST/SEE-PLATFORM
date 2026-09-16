@@ -15,7 +15,25 @@ unique_slug <- function(base) {
 }
 
 create_study <- function(user, title, description = "", quantity = "",
-                         methods = c("chips_and_bins", "quantile")) {
+                         methods = c("chips_and_bins", "quantile"),
+                         variable_type = "proportion", unit = "probability",
+                         lower = 0, upper = 1, precision = 2,
+                         preferred_distribution = "best") {
+  lower <- as.numeric(lower)
+  upper <- as.numeric(upper)
+  precision <- as.integer(precision)
+  if (!is.finite(lower) || !is.finite(upper) || !(lower < upper)) {
+    stop("Lower plausible bound must be less than the upper plausible bound.")
+  }
+  if (!variable_type %in% c("proportion", "continuous", "count")) {
+    stop("Unsupported variable type.")
+  }
+  if (!nzchar(trimws(unit %||% ""))) stop("A unit is required.")
+  if (!is.finite(precision) || precision < 0 || precision > 6) {
+    stop("Decimal places must be between 0 and 6.")
+  }
+  if (!identical(variable_type, "proportion")) methods <- setdiff(methods, "chips_and_bins")
+  if (!length(methods)) methods <- "quantile"
   org <- ensure_org()
   now <- iso_now()
   slug <- unique_slug(slugify(title))
@@ -25,12 +43,24 @@ create_study <- function(user, title, description = "", quantity = "",
     rounds = 3L,
     anonymizeFeedback = TRUE,
     quantileLevels = list(0.1, 0.5, 0.9),
+    variableType = variable_type,
+    unit = unit,
+    lowerBound = lower,
+    upperBound = upper,
+    precision = precision,
+    preferredDistribution = preferred_distribution,
     surveyWelcome = list(
       conductedBy = "Achutha Menon Centre for Health Science Studies (AMCHSS), SCTIMST, Trivandrum",
       why = description %||% "To capture structured expert judgment for decision support.",
       reason = "SHELF expert elicitation for HTA / clinical decision support.",
       instructions = "Complete chips-and-bins and/or P10/P50/P90 tasks, then submit.",
       quantityOfInterest = quantity,
+      variableType = variable_type,
+      unit = unit,
+      lowerBound = lower,
+      upperBound = upper,
+      precision = precision,
+      preferredDistribution = preferred_distribution,
       contactEmail = user$email
     ),
     caseStudyMeta = list(
@@ -94,11 +124,11 @@ create_study <- function(user, title, description = "", quantity = "",
         "Allocate all chips across bins for:",
         quantity %||% "the uncertain quantity"
       ),
-      variableType = "proportion",
+      variableType = variable_type,
       elicitationMethod = "chips_and_bins",
-      unit = "probability",
-      lowerBound = 0,
-      upperBound = 1,
+      unit = unit,
+      lowerBound = lower,
+      upperBound = upper,
       judgmentSchema = list(type = "chips_and_bins", binCount = 10L, totalChips = 20L),
       rationaleRequired = TRUE,
       sortOrder = sort_order,
@@ -115,11 +145,11 @@ create_study <- function(user, title, description = "", quantity = "",
       code = if (sort_order > 0) "Q2_QUANTILES" else "Q1_QUANTILES",
       title = paste("Low-High-Best —", quantity %||% title),
       prompt = paste("Provide P10, P50, and P90 for:", quantity %||% "the uncertain quantity"),
-      variableType = "proportion",
+      variableType = variable_type,
       elicitationMethod = "quantile",
-      unit = "probability",
-      lowerBound = 0,
-      upperBound = 1,
+      unit = unit,
+      lowerBound = lower,
+      upperBound = upper,
       judgmentSchema = list(type = "quantile", levels = list(0.1, 0.5, 0.9), requireMonotonic = TRUE),
       rationaleRequired = TRUE,
       sortOrder = sort_order,

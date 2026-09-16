@@ -11,10 +11,6 @@ app_server <- function(input, output, session) {
     sprintf("session started token=%s app_role=%s", session$token %||% "?", ee_app_role()),
     where = "session"
   )
-  session$onSessionEnded(function() {
-    ee_log("info", "session ended", where = "session")
-  })
-
   rv <- shiny::reactiveValues(
     user = NULL,
     page = "login",
@@ -27,10 +23,50 @@ app_server <- function(input, output, session) {
     seed_info = NULL,
     shelf_result = NULL,
     review_result = NULL,
+    review_refresh = 0L,
+    review_updated_at = NULL,
     bound_lo = NULL,
     bound_hi = NULL,
-    token_tried = FALSE
+    token_tried = FALSE,
+    last_activity = Sys.time(),
+    oidc_tried = FALSE
   )
+  session_timeout <- ee_session_timeout_minutes() * 60
+  touch_activity <- function() rv$last_activity <- Sys.time()
+
+  session$onSessionEnded(function() {
+    ee_log(
+      "info",
+      sprintf("session ended user=%s", rv$user$email %||% rv$survey_user$email %||% "anonymous"),
+      where = "audit.session"
+    )
+  })
+
+  shiny::observeEvent(input$ee_activity, {
+    touch_activity()
+  }, ignoreInit = TRUE)
+
+  shiny::observe({
+    shiny::invalidateLater(60000, session)
+    if (difftime(Sys.time(), rv$last_activity, units = "secs") > session_timeout) {
+      if (!is.null(rv$user) || !is.null(rv$survey_user)) {
+        ee_log(
+          "info",
+          sprintf("session timeout user=%s after=%s minutes",
+                  rv$user$email %||% rv$survey_user$email %||% "anonymous",
+                  ee_session_timeout_minutes()),
+          where = "audit.timeout"
+        )
+      }
+      rv$user <- NULL
+      rv$survey_user <- NULL
+      rv$survey_study <- NULL
+      rv$page <- "login"
+      rv$err <- "Your session expired due to inactivity. Please sign in again."
+      rv$msg <- ""
+      rv$last_activity <- Sys.time()
+    }
+  })
 
   query_params <- shiny::reactive({
     qs <- session$clientData$url_search
@@ -64,10 +100,47 @@ app_server <- function(input, output, session) {
     if (!ee_auth_dev_mode()) {
       cu <- ee_connect_user(session)
       if (!is.null(cu) && is.null(rv$user) && !is_survey_mode()) {
-        rv$user <- user_as_list(connect_login(cu))
+      tryCatch({
+        u <- connect_login(cu)
+        rv$user <- user_as_list(u)
         rv$page <- "dash"
-      }
+        touch_activity()
+        ee_log("info", sprintf("Posit Connect login %s as %s", u$email, u$platformRole),
+               where = "audit.login")
+      }, error = function(e) {
+        ee_log_error(e, where = "audit.login")
+        rv$err <- conditionMessage(e)
+      })
     }
+    }
+  })
+
+  shiny::observe({
+    if (isTRUE(rv$oidc_tried) || !ee_oidc_enabled() || is_survey_mode()) return()
+    q <- query_params()
+    if (!nzchar(q$code %||% "") && !nzchar(q$error %||% "")) return()
+    rv$oidc_tried <- TRUE
+    if (nzchar(q$error %||% "")) {
+      rv$err <- paste("Sign-in was not completed:", q$error_description %||% q$error)
+      return()
+    }
+    if (!ee_oidc_verify_state(q$state %||% "")) {
+      rv$err <- "The sign-in session expired or was invalid. Please try again."
+      return()
+    }
+    tryCatch({
+      rv$user <- user_as_list(oidc_login(q$code))
+      rv$page <- "dash"
+      touch_activity()
+      ee_log("info", sprintf("OIDC login %s", rv$user$email), where = "audit.login")
+    }, error = function(e) ee_handle(rv, e, "oidc_login"))
+  })
+
+  shiny::observeEvent(input$oidc_login, {
+    shiny::req(ee_oidc_enabled())
+    tryCatch({
+      session$sendCustomMessage("ee_oidc_redirect", ee_oidc_authorize_url(ee_oidc_state()))
+    }, error = function(e) ee_handle(rv, e, "oidc_redirect"))
   })
 
   enter_survey <- function(res) {
@@ -79,10 +152,10 @@ app_server <- function(input, output, session) {
     rv$survey_user <- u
     rv$survey_study <- res$study
     rv$survey_page <- 1L
-    b <- load_bounds(doc_id(res$study), u$personId, current_round(res$study))
-    if (!is.null(b)) {
-      rv$bound_lo <- as.numeric(b$lower)
-      rv$bound_hi <- as.numeric(b$upper)
+    q <- primary_question(study_questions(doc_id(res$study)))
+    if (!is.null(q)) {
+      rv$bound_lo <- as.numeric(q$lowerBound %||% 0)
+      rv$bound_hi <- as.numeric(q$upperBound %||% 1)
     }
     rv$review_result <- if (current_round(res$study) >= 2L) {
       q <- primary_question(study_questions(doc_id(res$study)))
@@ -96,6 +169,8 @@ app_server <- function(input, output, session) {
     } else {
       NULL
     }
+    rv$review_updated_at <- if (!is.null(rv$review_result)) Sys.time() else NULL
+    rv$review_refresh <- rv$review_refresh + 1L
   }
 
   shiny::observe({
@@ -104,6 +179,28 @@ app_server <- function(input, output, session) {
     if (!nzchar(tok)) return()
     rv$token_tried <- TRUE
     tryCatch(enter_survey(survey_entry_token(tok)), error = function(e) ee_handle(rv, e, "survey_token"))
+  })
+
+  shiny::observe({
+    shiny::invalidateLater(15000, session)
+    if (is.null(rv$survey_user) || !is_survey_mode() ||
+        is.null(rv$survey_study) || current_round(rv$survey_study) < 2L) {
+      return()
+    }
+    st <- find_study(doc_id(rv$survey_study))
+    q <- if (is.null(st)) NULL else primary_question(study_questions(doc_id(st)))
+    if (is.null(q)) return()
+    latest <- aggregation_as_shelf_result(
+      latest_aggregation(doc_id(st), doc_id(q), current_round(st) - 1L)
+    )
+    if (is.null(latest)) return()
+    old_id <- rv$review_result$aggregationId %||% ""
+    new_id <- latest$aggregationId %||% ""
+    if (!identical(as.character(old_id), as.character(new_id))) {
+      rv$review_result <- latest
+      rv$review_updated_at <- Sys.time()
+    }
+    rv$review_refresh <- rv$review_refresh + 1L
   })
 
   shiny::observeEvent(input$login_role, {
@@ -118,11 +215,13 @@ app_server <- function(input, output, session) {
       u <- dev_login(input$login_email, input$login_name, input$login_role)
       rv$user <- user_as_list(u)
       rv$page <- "dash"
-      ee_log("info", sprintf("dev login %s as %s", u$email, u$platformRole), where = "login")
+      touch_activity()
+      ee_log("info", sprintf("dev login %s as %s", u$email, u$platformRole), where = "audit.login")
     }, error = function(e) ee_handle(rv, e, "login"))
   })
 
   shiny::observeEvent(input$logout, {
+    ee_log("info", sprintf("staff logout user=%s", rv$user$email %||% "anonymous"), where = "audit.logout")
     rv$user <- NULL
     rv$page <- "login"
     rv$study_id <- NULL
@@ -174,12 +273,33 @@ app_server <- function(input, output, session) {
     if (is.null(methods) || !length(methods)) methods <- c("chips_and_bins", "quantile")
     tryCatch({
       require_role(can_create_study(rv$user), "Only facilitators can create case studies.")
+      variable_type <- input$new_variable_type %||% "proportion"
+      lower <- as.numeric(input$new_lower)
+      upper <- as.numeric(input$new_upper)
+      precision <- as.integer(input$new_precision)
+      if (!is.finite(lower) || !is.finite(upper) || !(lower < upper)) {
+        stop("Lower plausible bound must be less than the upper plausible bound.")
+      }
+      if (!is.finite(precision) || precision < 0 || precision > 6) {
+        stop("Decimal places must be between 0 and 6.")
+      }
+      if (!nzchar(trimws(input$new_unit %||% ""))) stop("Enter a unit for the quantity.")
+      if (!identical(variable_type, "proportion")) {
+        methods <- setdiff(methods, "chips_and_bins")
+        if (!length(methods)) methods <- "quantile"
+      }
       st <- create_study(
         rv$user,
         title = trimws(input$new_title),
         description = input$new_desc %||% "",
         quantity = input$new_qty %||% "",
-        methods = methods
+        methods = methods,
+        variable_type = variable_type,
+        unit = trimws(input$new_unit),
+        lower = lower,
+        upper = upper,
+        precision = precision,
+        preferred_distribution = input$new_distribution %||% "best"
       )
       rv$study_id <- doc_id(st)
       rv$page <- "study"
@@ -209,7 +329,7 @@ app_server <- function(input, output, session) {
     shiny::req(rv$study_id, nzchar(trimws(input$invite_email %||% "")))
     st <- find_study(rv$study_id)
     tryCatch({
-      require_role(can_invite(rv$user), "Only facilitators can invite experts.")
+      require_study_manager(rv$user, st, "invite experts to this study")
       p <- invite_expert(st, input$invite_email, input$invite_name, rv$user)
       tok <- issue_invite_token(find_study(rv$study_id), p)
       rv$msg <- sprintf(
@@ -221,10 +341,41 @@ app_server <- function(input, output, session) {
     }, error = function(e) ee_handle(rv, e, "invite_expert"))
   })
 
+  shiny::observeEvent(input$remove_expert, {
+    shiny::req(rv$study_id, nzchar(input$remove_expert %||% ""))
+    tryCatch({
+      st <- find_study(rv$study_id)
+      remove_study_expert(st, input$remove_expert, rv$user)
+      rv$msg <- "Expert removed from this survey."
+      ee_log("info", sprintf("expert %s removed from study %s", input$remove_expert, rv$study_id),
+             where = "audit.study_access")
+    }, error = function(e) ee_handle(rv, e, "remove_expert"))
+  })
+
+  shiny::observeEvent(input$save_study_details, {
+    shiny::req(rv$study_id)
+    tryCatch({
+      st <- update_study_details(find_study(rv$study_id), input$edit_title,
+                                 input$edit_description, rv$user)
+      rv$msg <- sprintf("Survey '%s' updated.", st$title)
+      ee_log("info", sprintf("study %s updated", rv$study_id), where = "audit.study_edit")
+    }, error = function(e) ee_handle(rv, e, "save_study_details"))
+  })
+
+  shiny::observeEvent(input$archive_study, {
+    shiny::req(rv$study_id)
+    tryCatch({
+      archive_study(find_study(rv$study_id), rv$user)
+      rv$msg <- "Survey archived."
+      rv$page <- "dash"
+      ee_log("info", sprintf("study %s archived", rv$study_id), where = "audit.study_archive")
+    }, error = function(e) ee_handle(rv, e, "archive_study"))
+  })
+
   shiny::observeEvent(input$advance_round, {
     tryCatch({
-      require_role(can_advance_round(rv$user))
       st <- find_study(rv$study_id)
+      require_study_manager(rv$user, st, "advance this study")
       st <- advance_round(st)
       rv$msg <- sprintf("Now round %s. Experts who reopen the link will see blinded round-1 distributions.", current_round(st))
       ee_log("info", rv$msg, where = "advance_round")
@@ -406,7 +557,17 @@ app_server <- function(input, output, session) {
           class = "login-card",
           htmltools::tags$h1("MongoDB not connected"),
           htmltools::tags$p(ping$message),
-          htmltools::tags$p("Start mongod or set MONGODB_URI in .Renviron. See README.md.")
+          htmltools::tags$p("Start mongod or set MONGODB_URI in .Renviron. See README.md."),
+          htmltools::tags$p(
+            class = "team",
+            htmltools::tags$a(
+              href = "https://hta-amchss-sctimst.github.io/RRC/",
+              target = "_blank",
+              rel = "noopener noreferrer",
+              aria_label = "Achutha Menon Centre for Health Science Studies website",
+              "Achutha Menon Centre for Health Science Studies (AMCHSS)"
+            )
+          )
         )
       ))
     }
@@ -415,7 +576,18 @@ app_server <- function(input, output, session) {
     if (is.null(rv$user)) {
       return(shiny::div(class = "login-page", shiny::div(class = "login-card",
         htmltools::tags$h1("Sign in required"),
-        htmltools::tags$p("This staff app expects Posit Connect login (session user).")
+        htmltools::tags$p(if (ee_oidc_enabled()) "Sign in with your organization account to continue." else
+          "This staff app expects Posit Connect login (session user)."),
+        htmltools::tags$p(
+          class = "team",
+          htmltools::tags$a(
+            href = "https://hta-amchss-sctimst.github.io/RRC/",
+            target = "_blank",
+            rel = "noopener noreferrer",
+            aria_label = "Achutha Menon Centre for Health Science Studies website",
+            "Achutha Menon Centre for Health Science Studies (AMCHSS)"
+          )
+        )
       )))
     }
     switch(
@@ -453,8 +625,23 @@ app_server <- function(input, output, session) {
 
   output$shelf_params <- shiny::renderTable({
     shiny::req(rv$shelf_result$params)
-    rv$shelf_result$params
-  })
+    params <- rv$shelf_result$params
+    pool_view <- input$pool_view %||% "both"
+    if (pool_view %in% c("median", "linear")) {
+      pool_role <- if (identical(pool_view, "median")) "median_pool" else "linear_pool"
+      roles <- tolower(trimws(as.character(params$role %||% "")))
+      params <- params[roles == "expert" | roles == pool_role, , drop = FALSE]
+    }
+    numeric_cols <- c("q_low", "q_mid", "q_high")
+    params[numeric_cols] <- lapply(params[numeric_cols], function(x) {
+      formatC(as.numeric(x), format = "f", digits = 2)
+    })
+    names(params) <- c(
+      "Expert / result", "Role", "Lower quantile", "Median quantile",
+      "Upper quantile", "Distribution", "Best fit from SHELF"
+    )
+    params
+  }, striped = TRUE, bordered = TRUE, hover = TRUE, spacing = "s", rownames = FALSE)
 
   output$dl_csv <- shiny::downloadHandler(
     filename = function() sprintf("shelf-params-%s.csv", Sys.Date()),
@@ -466,7 +653,7 @@ app_server <- function(input, output, session) {
   )
 
   output$dl_pdf <- shiny::downloadHandler(
-    filename = function() sprintf("shelf-audit-%s.pdf", Sys.Date()),
+    filename = function() sprintf("complete-study-audit-%s.pdf", Sys.Date()),
     content = function(file) {
       st <- find_study(rv$study_id)
       require_role(can_export_audit(rv$user, st))
@@ -475,6 +662,35 @@ app_server <- function(input, output, session) {
       q <- if (length(q)) q[[1]] else qs[[1]]
       comments <- list_peer_comments(doc_id(st), doc_id(q), current_round(st))
       write_audit_pdf(file, rv$shelf_result, st, q, current_round(st), comments, input$pool_view %||% "both")
+    }
+  )
+
+  output$dl_bundle <- shiny::downloadHandler(
+    filename = function() sprintf("study-audit-bundle-%s.zip", Sys.Date()),
+    content = function(file) {
+      st <- find_study(rv$study_id)
+      require_role(can_export_audit(rv$user, st))
+      qs <- study_questions(doc_id(st))
+      q <- Filter(function(x) identical(doc_id(x), input$resp_question), qs)
+      q <- if (length(q)) q[[1]] else qs[[1]]
+      comments <- list_peer_comments(doc_id(st), doc_id(q), current_round(st))
+      write_audit_bundle(
+        file, rv$shelf_result, st, q, current_round(st),
+        comments, input$pool_view %||% "both"
+      )
+    }
+  )
+
+  output$dl_quarto <- shiny::downloadHandler(
+    filename = function() sprintf("shelf-dossier-%s.html", Sys.Date()),
+    content = function(file) {
+      st <- find_study(rv$study_id)
+      require_role(can_export_audit(rv$user, st))
+      shiny::req(rv$shelf_result)
+      qs <- study_questions(doc_id(st))
+      q <- Filter(function(x) identical(doc_id(x), input$resp_question), qs)
+      q <- if (length(q)) q[[1]] else qs[[1]]
+      render_quarto_dossier(file, st, q, current_round(st))
     }
   )
 }

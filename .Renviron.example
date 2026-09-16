@@ -17,3 +17,11 @@ APP_ROLE=both
 
 # Copied into invite links
 SURVEY_PUBLIC_URL=http://127.0.0.1:3938
+
+# OIDC / Auth0 (leave blank for local dev login)
+OIDC_ISSUER=https://your-tenant.us.auth0.com
+OIDC_CLIENT_ID=
+OIDC_CLIENT_SECRET=
+OIDC_REDIRECT_URI=http://127.0.0.1:3938
+OIDC_STATE_SECRET=
+OIDC_SCOPE=openid profile email
