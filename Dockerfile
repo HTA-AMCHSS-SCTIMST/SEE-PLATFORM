@@ -20,11 +20,12 @@ COPY . /app
 RUN R -e "install.packages('remotes', repos='https://packagemanager.posit.co/cran/__linux__/bookworm/latest')"
 RUN R -e "remotes::install_version('xfun', version='0.55', repos='https://packagemanager.posit.co/cran/__linux__/bookworm/latest')"
 
-# 1. Install the rest of the packages
-RUN R -e "install.packages(c('mongolite', 'jsonlite', 'ggplot2', 'plotly', 'httr2', 'openssl', 'shiny'), repos='https://packagemanager.posit.co/cran/__linux__/bookworm/latest', dependencies = TRUE)"
+# 1. Install the rest of the packages (ADDED 'SHELF' HERE)
+RUN R -e "install.packages(c('SHELF', 'mongolite', 'jsonlite', 'ggplot2', 'plotly', 'httr2', 'openssl', 'shiny'), repos='https://packagemanager.posit.co/cran/__linux__/bookworm/latest', dependencies = TRUE)"
 
-# 2. VERIFICATION STEP: Forces the build to fail if mongolite isn't loaded correctly
+# 2. VERIFICATION STEP: Forces the build to fail if either core engine isn't loaded
 RUN R -e "if (!requireNamespace('mongolite', quietly = TRUE)) stop('mongolite failed to install correctly!')"
+RUN R -e "if (!requireNamespace('SHELF', quietly = TRUE)) stop('SHELF failed to install correctly!')"
 
 # Expose the port Shiny runs on
 EXPOSE 3838
