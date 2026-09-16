@@ -13,7 +13,6 @@ ee_on_posit_connect <- function() {
 
 ee_auth_dev_mode <- function() {
   if (ee_on_posit_connect()) return(FALSE)
-  if (nzchar(Sys.getenv("RENDER"))) return(FALSE)
   if (ee_oidc_enabled()) return(FALSE)
   tolower(ee_env("AUTH_DEV_MODE", "true")) %in% c("1", "true", "yes")
 }
