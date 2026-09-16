@@ -1,7 +1,8 @@
-# Use a newer, more stable base image
+# Use the stable R 4.4.0 image
 FROM rocker/shiny:4.4.0
 
-# Install system dependencies for R packages (mongolite, openssl, etc.)
+# Install ALL required system dependencies for mongolite and others
+# We add libssl and libcurl explicitly to ensure the MongoDB C-driver compiles
 RUN apt-get update && apt-get install -y \
     libssl-dev \
     libcurl4-openssl-dev \
@@ -14,9 +15,12 @@ WORKDIR /app
 # Copy project files
 COPY . /app
 
-# Explicitly update shiny and install required packages to avoid version check errors
-RUN R -e "install.packages('shiny', repos='https://cloud.r-project.org')"
-RUN R -e "install.packages(c('mongolite', 'jsonlite', 'ggplot2', 'plotly', 'httr2', 'openssl'), repos='https://cloud.r-project.org')"
+# Install mongolite separately first to ensure it's linked correctly
+# We use dependencies = TRUE to make sure everything it needs is present
+RUN R -e "install.packages('mongolite', repos='https://cloud.r-project.org', dependencies = TRUE)"
+
+# Install the remaining required packages
+RUN R -e "install.packages(c('jsonlite', 'ggplot2', 'plotly', 'httr2', 'openssl'), repos='https://cloud.r-project.org')"
 
 # Expose the port Shiny runs on
 EXPOSE 3838
