@@ -17,11 +17,7 @@ login_ui <- function() {
           "Achutha Menon Centre for Health Science Studies (AMCHSS)"
         )
       ),
-      shiny::div(
-        class = "muted",
-        "Local / Posit-dev sign-in. Facilitators create case studies and invite experts. After seeding, open the survey as ",
-        htmltools::tags$code("priya.nair@hospital.org")
-      ),
+      
       shiny::radioButtons(
         "login_role",
         "Role",
