@@ -196,6 +196,76 @@ study_questions <- function(study_id) {
   qs[order(ords)]
 }
 
+cache_session_value <- function(rv, cache_name, key, value) {
+  cache <- rv[[cache_name]] %||% list()
+  key <- as.character(key)
+  if (key %in% names(cache) && identical(cache[[key]], value)) return(invisible(value))
+  cache[[key]] <- value
+  rv[[cache_name]] <- cache
+  invisible(value)
+}
+
+get_cached_study <- function(rv, study_id, refresh = FALSE) {
+  key <- as.character(study_id %||% "")
+  if (!nzchar(key)) return(NULL)
+  cache <- rv$study_cache %||% list()
+  if (!isTRUE(refresh) && key %in% names(cache)) return(cache[[key]])
+  study <- find_study(key)
+  if (!is.null(study)) {
+    cache_session_value(rv, "study_cache", doc_id(study), study)
+    if (nzchar(study$slug %||% "")) {
+      cache_session_value(rv, "study_cache", study$slug, study)
+    }
+  }
+  study
+}
+
+get_cached_questions <- function(rv, study_id, refresh = FALSE) {
+  key <- as.character(study_id %||% "")
+  if (!nzchar(key)) return(list())
+  cache <- rv$questions_cache %||% list()
+  if (!isTRUE(refresh) && key %in% names(cache)) return(cache[[key]])
+  questions <- study_questions(key)
+  cache_session_value(rv, "questions_cache", key, questions)
+  questions
+}
+
+get_cached_experts <- function(rv, study) {
+  if (is.null(study)) return(list())
+  key <- doc_id(study)
+  cache <- rv$experts_cache %||% list()
+  if (key %in% names(cache)) return(cache[[key]])
+  experts <- study_experts(study)
+  cache_session_value(rv, "experts_cache", key, experts)
+  experts
+}
+
+invalidate_study_cache <- function(rv, study_id = NULL, caches = c(
+  "study_cache", "questions_cache", "experts_cache"
+)) {
+  for (cache_name in caches) {
+    cache <- rv[[cache_name]] %||% list()
+    if (is.null(study_id)) {
+      cache <- list()
+    } else if (identical(cache_name, "study_cache")) {
+      key <- as.character(study_id)
+      cache <- Filter(function(study) !identical(doc_id(study), key), cache)
+    } else {
+      cache[[as.character(study_id)]] <- NULL
+    }
+    rv[[cache_name]] <- cache
+  }
+  invisible(NULL)
+}
+
+get_expert_judgments_for_study <- function(study_id, expert_id) {
+  mongo_all("judgments", sprintf(
+    '{"studyId": %s, "expertId": %s}',
+    json_escape(study_id),
+    json_escape(expert_id)
+  ))
+}
+
 invite_expert <- function(study, email, name = NULL, user) {
   email <- tolower(trimws(email))
   org <- ensure_org()

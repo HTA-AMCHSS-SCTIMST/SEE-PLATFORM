@@ -76,7 +76,8 @@ load_bounds <- function(study_id, person_id, round_number) {
   ))
 }
 
-save_bounds <- function(study, person_id, lo, hi, round_number = 1L) {
+save_bounds <- function(study, person_id, lo, hi, round_number = 1L,
+                        existing = NULL, use_cached = FALSE) {
   lo <- as.numeric(lo)
   hi <- as.numeric(hi)
   if (!is.finite(lo) || !is.finite(hi) || !(lo < hi)) {
@@ -84,7 +85,7 @@ save_bounds <- function(study, person_id, lo, hi, round_number = 1L) {
   }
   now <- iso_now()
   sid <- doc_id(study)
-  existing <- load_bounds(sid, person_id, round_number)
+  if (!isTRUE(use_cached)) existing <- load_bounds(sid, person_id, round_number)
   fields <- list(
     studyId = sid,
     personId = person_id,
@@ -95,11 +96,12 @@ save_bounds <- function(study, person_id, lo, hi, round_number = 1L) {
   )
   if (is.null(existing)) {
     fields$createdAt <- now
-    mongo_insert("elicitation_bounds", fields)
+    existing <- mongo_insert("elicitation_bounds", fields)
   } else {
     mongo_update("elicitation_bounds", q_id(doc_id(existing)), fields)
+    existing <- utils::modifyList(existing, fields)
   }
-  load_bounds(sid, person_id, round_number)
+  existing
 }
 
 require_onboarding <- function(study, person_id) {

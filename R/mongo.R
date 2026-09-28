@@ -77,6 +77,7 @@ ensure_indexes <- function() {
     mongo_col("people")$index('{"email": 1}')
     mongo_col("questions")$index('{"studyId": 1}')
     mongo_col("judgments")$index('{"studyId": 1, "questionId": 1, "expertId": 1}')
+    mongo_col("judgments")$index('{"studyId": 1, "expertId": 1}')
     mongo_col("study_access")$index('{"studyId": 1, "personId": 1}')
     mongo_col("invite_tokens")$index('{"token": 1}')
     mongo_col("onboarding")$index('{"studyId": 1, "personId": 1}')

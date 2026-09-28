@@ -109,10 +109,10 @@ staff_dash_ui <- function(rv) {
 }
 
 staff_study_ui <- function(rv) {
-  st <- find_study(rv$study_id)
+  st <- get_cached_study(rv, rv$study_id)
   user <- rv$user
   if (is.null(st)) return(staff_shell(user, htmltools::p("Study not found.")))
-  experts <- study_experts(st)
+  experts <- get_cached_experts(rv, st)
   url <- survey_url(st)
   rows <- if (!length(experts)) {
     htmltools::p(class = "muted", "No experts invited yet.")
@@ -206,7 +206,7 @@ staff_study_ui <- function(rv) {
 }
 
 staff_responses_ui <- function(rv) {
-  st <- find_study(rv$study_id)
+  st <- get_cached_study(rv, rv$study_id)
   user <- rv$user
   if (is.null(st)) return(staff_shell(user, htmltools::p("Study not found.")))
   if (!can_view_shelf(user, st)) {
@@ -215,7 +215,7 @@ staff_responses_ui <- function(rv) {
       htmltools::tags$p("You cannot open SHELF results for this study while it is in active deliberation.")
     )))
   }
-  qs <- study_questions(doc_id(st))
+  qs <- get_cached_questions(rv, doc_id(st))
   stt <- shelf_status()
   choices <- stats::setNames(vapply(qs, doc_id, character(1)), vapply(qs, function(q) q$title, character(1)))
   result_ui <- NULL

@@ -42,10 +42,16 @@ survey_root_ui <- function(input, rv, study_key, ping, token_key = "") {
       htmltools::tags$p("Open a survey link that includes ?study=<slug> or a personal invite token.")
     )))
   }
-  st <- if (nzchar(study_key)) find_study(study_key) else NULL
+  st <- if (!is.null(rv$survey_study)) {
+    get_cached_study(rv, doc_id(rv$survey_study))
+  } else if (nzchar(study_key)) {
+    get_cached_study(rv, study_key)
+  } else {
+    NULL
+  }
   if (is.null(st) && nzchar(token_key)) {
     tok <- find_invite_token(token_key)
-    if (!is.null(tok)) st <- find_study(tok$studyId)
+    if (!is.null(tok)) st <- get_cached_study(rv, tok$studyId)
   }
   if (is.null(st)) {
     return(shiny::div(class = "login-page", shiny::div(class = "login-card",
@@ -69,7 +75,7 @@ survey_root_ui <- function(input, rv, study_key, ping, token_key = "") {
       )
     ))
   }
-  qs <- study_questions(doc_id(st))
+  qs <- get_cached_questions(rv, doc_id(st))
   pages <- survey_pages(st, qs)
   idx <- max(1L, min(as.integer(rv$survey_page), length(pages)))
   pg <- pages[[idx]]
@@ -243,11 +249,15 @@ review_rationale_list <- function(shelf_result) {
 
 review_comment_list <- function(rv) {
   st <- rv$survey_study
-  q <- primary_question(study_questions(doc_id(st)))
+  q <- primary_question(get_cached_questions(rv, doc_id(st)))
   if (is.null(q)) return(NULL)
   comments <- list_peer_comments(doc_id(st), doc_id(q), current_round(st))
   if (!length(comments)) return(htmltools::tags$p(class = "muted", "No comments yet."))
-  js <- current_judgments(doc_id(st), doc_id(q), max(1L, current_round(st) - 1L))
+  js <- Filter(function(j) {
+    identical(as.character(j$questionId %||% ""), doc_id(q)) &&
+      identical(as.integer(j$roundNumber %||% 1L), max(1L, current_round(st) - 1L)) &&
+      isTRUE(j$isCurrent) && !isTRUE(j$isConsensus)
+  }, rv$survey_judgments %||% list())
   mapping <- blind_labels_for_ids(c(
     vapply(js, function(j) as.character(j$expertId %||% ""), character(1)),
     vapply(comments, function(c) as.character(c$authorPersonId %||% ""), character(1))

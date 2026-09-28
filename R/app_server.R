@@ -27,6 +27,13 @@ app_server <- function(input, output, session) {
     review_updated_at = NULL,
     bound_lo = NULL,
     bound_hi = NULL,
+    bounds_record = NULL,
+    bounds_record_round = NULL,
+    study_cache = list(),
+    questions_cache = list(),
+    experts_cache = list(),
+    survey_judgments = list(),
+    survey_onboarded = NULL,
     token_tried = FALSE,
     last_activity = Sys.time(),
     oidc_tried = FALSE
@@ -61,6 +68,8 @@ app_server <- function(input, output, session) {
       rv$user <- NULL
       rv$survey_user <- NULL
       rv$survey_study <- NULL
+      rv$study_id <- NULL
+      clear_session_caches()
       rv$page <- "login"
       rv$err <- "Your session expired due to inactivity. Please sign in again."
       rv$msg <- ""
@@ -94,6 +103,45 @@ app_server <- function(input, output, session) {
   survey_pid <- function() {
     u <- rv$survey_user
     u$personId %||% u$id
+  }
+
+  require_survey_onboarding <- function() {
+    if (is.null(rv$survey_onboarded)) {
+      rv$survey_onboarded <- onboarding_complete(
+        load_onboarding(doc_id(rv$survey_study), survey_pid())
+      )
+    }
+    if (!isTRUE(rv$survey_onboarded)) {
+      stop("Complete onboarding, terms of use, and the practice task first.")
+    }
+    invisible(TRUE)
+  }
+
+  cache_survey_judgment <- function(judgment) {
+    cached <- rv$survey_judgments %||% list()
+    for (i in seq_along(cached)) {
+      same_question <- identical(
+        as.character(cached[[i]]$questionId %||% ""),
+        as.character(judgment$questionId %||% "")
+      )
+      same_round <- identical(
+        as.integer(cached[[i]]$roundNumber %||% 1L),
+        as.integer(judgment$roundNumber %||% 1L)
+      )
+      if (same_question && same_round && !isTRUE(cached[[i]]$isConsensus)) {
+        cached[[i]]$isCurrent <- FALSE
+      }
+    }
+    cached[[length(cached) + 1L]] <- judgment
+    rv$survey_judgments <- cached
+  }
+
+  clear_session_caches <- function() {
+    invalidate_study_cache(rv)
+    rv$survey_judgments <- list()
+    rv$survey_onboarded <- NULL
+    rv$bounds_record <- NULL
+    rv$bounds_record_round <- NULL
   }
 
   shiny::observe({
@@ -151,14 +199,24 @@ app_server <- function(input, output, session) {
     }
     rv$survey_user <- u
     rv$survey_study <- res$study
+    sid <- doc_id(res$study)
+    cache_session_value(rv, "study_cache", sid, res$study)
+    if (nzchar(res$study$slug %||% "")) {
+      cache_session_value(rv, "study_cache", res$study$slug, res$study)
+    }
+    questions <- get_cached_questions(rv, sid)
+    rv$survey_judgments <- get_expert_judgments_for_study(sid, survey_pid())
+    rv$survey_onboarded <- onboarding_complete(load_onboarding(sid, survey_pid()))
+    rv$bounds_record <- load_bounds(sid, survey_pid(), current_round(res$study))
+    rv$bounds_record_round <- current_round(res$study)
     rv$survey_page <- 1L
-    q <- primary_question(study_questions(doc_id(res$study)))
+    q <- primary_question(questions)
     if (!is.null(q)) {
-      rv$bound_lo <- as.numeric(q$lowerBound %||% 0)
-      rv$bound_hi <- as.numeric(q$upperBound %||% 1)
+      rv$bound_lo <- as.numeric(rv$bounds_record$lower %||% q$lowerBound %||% 0)
+      rv$bound_hi <- as.numeric(rv$bounds_record$upper %||% q$upperBound %||% 1)
     }
     rv$review_result <- if (current_round(res$study) >= 2L) {
-      q <- primary_question(study_questions(doc_id(res$study)))
+      q <- primary_question(questions)
       if (is.null(q)) {
         NULL
       } else {
@@ -187,8 +245,8 @@ app_server <- function(input, output, session) {
         is.null(rv$survey_study) || current_round(rv$survey_study) < 2L) {
       return()
     }
-    st <- find_study(doc_id(rv$survey_study))
-    q <- if (is.null(st)) NULL else primary_question(study_questions(doc_id(st)))
+    st <- get_cached_study(rv, doc_id(rv$survey_study), refresh = TRUE)
+    q <- if (is.null(st)) NULL else primary_question(get_cached_questions(rv, doc_id(st)))
     if (is.null(q)) return()
     latest <- aggregation_as_shelf_result(
       latest_aggregation(doc_id(st), doc_id(q), current_round(st) - 1L)
@@ -225,6 +283,7 @@ app_server <- function(input, output, session) {
     rv$user <- NULL
     rv$page <- "login"
     rv$study_id <- NULL
+    clear_session_caches()
     rv$msg <- ""
   })
 
@@ -256,6 +315,7 @@ app_server <- function(input, output, session) {
     tryCatch({
       require_role(can_seed_demo(rv$user), "Only facilitators can seed the demo study.")
       rv$seed_info <- seed_demo(rv$user)
+      invalidate_study_cache(rv)
       rv$msg <- sprintf(
         "Demo ready with dummy SHELF judgments (%s). Survey: %s  ·  Experts: %s",
         rv$seed_info$dummyJudgments %||% 0L,
@@ -302,6 +362,8 @@ app_server <- function(input, output, session) {
         preferred_distribution = input$new_distribution %||% "best"
       )
       rv$study_id <- doc_id(st)
+      cache_session_value(rv, "study_cache", doc_id(st), st)
+      if (nzchar(st$slug %||% "")) cache_session_value(rv, "study_cache", st$slug, st)
       rv$page <- "study"
       rv$msg <- "Survey created."
     }, error = function(e) ee_handle(rv, e, "create_study"))
@@ -315,7 +377,7 @@ app_server <- function(input, output, session) {
   }, ignoreInit = TRUE)
 
   shiny::observeEvent(input$goto_responses, {
-    st <- find_study(rv$study_id)
+    st <- get_cached_study(rv, rv$study_id)
     if (!can_view_shelf(rv$user, st)) {
       rv$err <- "You cannot open SHELF fitting while this study is in active deliberation."
       return()
@@ -327,14 +389,16 @@ app_server <- function(input, output, session) {
 
   shiny::observeEvent(input$invite_go, {
     shiny::req(rv$study_id, nzchar(trimws(input$invite_email %||% "")))
-    st <- find_study(rv$study_id)
+    st <- get_cached_study(rv, rv$study_id)
     tryCatch({
       require_study_manager(rv$user, st, "invite experts to this study")
       p <- invite_expert(st, input$invite_email, input$invite_name, rv$user)
-      tok <- issue_invite_token(find_study(rv$study_id), p)
+      invalidate_study_cache(rv, rv$study_id, caches = c("study_cache", "experts_cache"))
+      st <- get_cached_study(rv, rv$study_id)
+      tok <- issue_invite_token(st, p)
       rv$msg <- sprintf(
         "Added %s (%s). Personal link: %s",
-        p$name %||% "", p$email, expert_survey_url(find_study(rv$study_id), p, tok)
+        p$name %||% "", p$email, expert_survey_url(st, p, tok)
       )
       shiny::updateTextInput(session, "invite_email", value = "")
       shiny::updateTextInput(session, "invite_name", value = "")
@@ -344,8 +408,9 @@ app_server <- function(input, output, session) {
   shiny::observeEvent(input$remove_expert, {
     shiny::req(rv$study_id, nzchar(input$remove_expert %||% ""))
     tryCatch({
-      st <- find_study(rv$study_id)
+      st <- get_cached_study(rv, rv$study_id)
       remove_study_expert(st, input$remove_expert, rv$user)
+      invalidate_study_cache(rv, rv$study_id, caches = "experts_cache")
       rv$msg <- "Expert removed from this survey."
       ee_log("info", sprintf("expert %s removed from study %s", input$remove_expert, rv$study_id),
              where = "audit.study_access")
@@ -355,8 +420,10 @@ app_server <- function(input, output, session) {
   shiny::observeEvent(input$save_study_details, {
     shiny::req(rv$study_id)
     tryCatch({
-      st <- update_study_details(find_study(rv$study_id), input$edit_title,
+      st <- update_study_details(get_cached_study(rv, rv$study_id), input$edit_title,
                                  input$edit_description, rv$user)
+      cache_session_value(rv, "study_cache", rv$study_id, st)
+      if (nzchar(st$slug %||% "")) cache_session_value(rv, "study_cache", st$slug, st)
       rv$msg <- sprintf("Survey '%s' updated.", st$title)
       ee_log("info", sprintf("study %s updated", rv$study_id), where = "audit.study_edit")
     }, error = function(e) ee_handle(rv, e, "save_study_details"))
@@ -365,7 +432,8 @@ app_server <- function(input, output, session) {
   shiny::observeEvent(input$archive_study, {
     shiny::req(rv$study_id)
     tryCatch({
-      archive_study(find_study(rv$study_id), rv$user)
+      archive_study(get_cached_study(rv, rv$study_id), rv$user)
+      invalidate_study_cache(rv, rv$study_id)
       rv$msg <- "Survey archived."
       rv$page <- "dash"
       ee_log("info", sprintf("study %s archived", rv$study_id), where = "audit.study_archive")
@@ -374,9 +442,12 @@ app_server <- function(input, output, session) {
 
   shiny::observeEvent(input$advance_round, {
     tryCatch({
-      st <- find_study(rv$study_id)
+      st <- get_cached_study(rv, rv$study_id)
       require_study_manager(rv$user, st, "advance this study")
       st <- advance_round(st)
+      invalidate_study_cache(rv, rv$study_id)
+      cache_session_value(rv, "study_cache", rv$study_id, st)
+      if (nzchar(st$slug %||% "")) cache_session_value(rv, "study_cache", st$slug, st)
       rv$msg <- sprintf("Now round %s. Experts who reopen the link will see blinded round-1 distributions.", current_round(st))
       ee_log("info", rv$msg, where = "advance_round")
     }, error = function(e) ee_handle(rv, e, "advance_round"))
@@ -384,7 +455,8 @@ app_server <- function(input, output, session) {
 
   shiny::observeEvent(input$complete_study, {
     tryCatch({
-      st <- complete_study(find_study(rv$study_id), rv$user)
+      st <- complete_study(get_cached_study(rv, rv$study_id), rv$user)
+      cache_session_value(rv, "study_cache", rv$study_id, st)
       rv$msg <- "Study marked complete. Researchers and students can view the consensus."
     }, error = function(e) ee_handle(rv, e, "complete_study"))
   })
@@ -407,12 +479,13 @@ app_server <- function(input, output, session) {
 
   shiny::observeEvent(input$save_onboarding, {
     tryCatch({
-      save_onboarding(
+      onboarding <- save_onboarding(
         rv$survey_study, survey_pid(),
         input$coi_financial, input$coi_academic,
         isTRUE(input$tou_accept),
         input$attribution_pref %||% "anonymous"
       )
+      rv$survey_onboarded <- onboarding_complete(onboarding)
       rv$err <- ""
       rv$survey_page <- rv$survey_page + 1L
     }, error = function(e) ee_handle(rv, e, "save_onboarding"))
@@ -420,7 +493,8 @@ app_server <- function(input, output, session) {
 
   shiny::observeEvent(input$save_calibration, {
     tryCatch({
-      save_calibration(rv$survey_study, survey_pid(), input$practice_p)
+      onboarding <- save_calibration(rv$survey_study, survey_pid(), input$practice_p)
+      rv$survey_onboarded <- onboarding_complete(onboarding)
       rv$err <- ""
       rv$survey_page <- rv$survey_page + 1L
     }, error = function(e) ee_handle(rv, e, "save_calibration"))
@@ -428,8 +502,18 @@ app_server <- function(input, output, session) {
 
   shiny::observeEvent(input$save_bounds, {
     tryCatch({
-      require_onboarding(rv$survey_study, survey_pid())
-      b <- save_bounds(rv$survey_study, survey_pid(), input$bound_lo, input$bound_hi, current_round(rv$survey_study))
+      require_survey_onboarding()
+      round_number <- current_round(rv$survey_study)
+      if (!identical(as.integer(rv$bounds_record_round), round_number)) {
+        rv$bounds_record <- load_bounds(doc_id(rv$survey_study), survey_pid(), round_number)
+        rv$bounds_record_round <- round_number
+      }
+      b <- save_bounds(
+        rv$survey_study, survey_pid(), input$bound_lo, input$bound_hi,
+        round_number, existing = rv$bounds_record, use_cached = TRUE
+      )
+      rv$bounds_record <- b
+      rv$bounds_record_round <- round_number
       rv$bound_lo <- as.numeric(b$lower)
       rv$bound_hi <- as.numeric(b$upper)
       rv$err <- ""
@@ -439,7 +523,7 @@ app_server <- function(input, output, session) {
 
   shiny::observeEvent(input$save_comment, {
     tryCatch({
-      q <- primary_question(study_questions(doc_id(rv$survey_study)))
+      q <- primary_question(get_cached_questions(rv, doc_id(rv$survey_study)))
       shiny::req(q)
       save_peer_comment(rv$survey_study, q, survey_pid(), input$peer_comment, current_round(rv$survey_study))
       rv$msg <- "Comment posted."
@@ -450,7 +534,7 @@ app_server <- function(input, output, session) {
 
   shiny::observeEvent(input$save_chips, {
     shiny::req(rv$survey_study, rv$survey_user)
-    qs <- study_questions(doc_id(rv$survey_study))
+    qs <- get_cached_questions(rv, doc_id(rv$survey_study))
     pages <- survey_pages(rv$survey_study, qs)
     pg <- pages[[rv$survey_page]]
     shiny::req(identical(pg$kind, "chips"), !is.null(pg$question))
@@ -461,19 +545,20 @@ app_server <- function(input, output, session) {
       return()
     }
     tryCatch({
-      require_onboarding(rv$survey_study, survey_pid())
+      require_survey_onboarding()
       lo <- rv$bound_lo %||% val$lowerBound
       hi <- rv$bound_hi %||% val$upperBound
       if (!is.finite(lo) || !is.finite(hi) || !(lo < hi)) stop("Set plausible bounds L < U first.")
       require_rationale_text(input$chips_rationale, isTRUE(pg$question$rationaleRequired %||% TRUE))
       payload <- chips_payload(val$bins, val$totalChips, lo, hi, input$chips_rationale %||% "")
-      save_judgment(
+      judgment <- save_judgment(
         rv$survey_study, pg$question,
         survey_pid(),
         rv$survey_user$displayName,
         payload,
         current_round(rv$survey_study)
       )
+      cache_survey_judgment(judgment)
       rv$err <- ""
       rv$msg <- "Chips saved."
       rv$survey_page <- rv$survey_page + 1L
@@ -483,7 +568,7 @@ app_server <- function(input, output, session) {
 
   shiny::observeEvent(input$save_quantile, {
     shiny::req(rv$survey_study, rv$survey_user)
-    qs <- study_questions(doc_id(rv$survey_study))
+    qs <- get_cached_questions(rv, doc_id(rv$survey_study))
     pages <- survey_pages(rv$survey_study, qs)
     pg <- pages[[rv$survey_page]]
     shiny::req(identical(pg$kind, "quantile"), !is.null(pg$question))
@@ -493,7 +578,7 @@ app_server <- function(input, output, session) {
     lo <- rv$bound_lo %||% as.numeric(pg$question$lowerBound %||% 0)
     hi <- rv$bound_hi %||% as.numeric(pg$question$upperBound %||% 1)
     tryCatch({
-      require_onboarding(rv$survey_study, survey_pid())
+      require_survey_onboarding()
       require_rationale_text(input$q_rationale, isTRUE(pg$question$rationaleRequired %||% TRUE))
       mode <- input$q_mode %||% "percentile"
       if (identical(mode, "quartile")) {
@@ -505,13 +590,14 @@ app_server <- function(input, output, session) {
         validate_strict_quantiles(vals, lo, hi)
         payload <- quantile_payload(a, b, c, input$q_rationale %||% "", lo, hi)
       }
-      save_judgment(
+      judgment <- save_judgment(
         rv$survey_study, pg$question,
         survey_pid(),
         rv$survey_user$displayName,
         payload,
         current_round(rv$survey_study)
       )
+      cache_survey_judgment(judgment)
       rv$err <- ""
       rv$msg <- "Percentiles saved."
       rv$survey_page <- rv$survey_page + 1L
@@ -522,8 +608,8 @@ app_server <- function(input, output, session) {
   shiny::observeEvent(input$run_shelf, {
     shiny::req(rv$study_id, input$resp_question)
     rv$err <- ""
-    st <- find_study(rv$study_id)
-    qs <- study_questions(doc_id(st))
+    st <- get_cached_study(rv, rv$study_id)
+    qs <- get_cached_questions(rv, doc_id(st))
     q <- Filter(function(x) identical(doc_id(x), input$resp_question), qs)[[1]]
     tryCatch({
       require_role(can_run_shelf(rv$user, st), "Only facilitators can run SHELF.")
@@ -541,7 +627,7 @@ app_server <- function(input, output, session) {
     qid <- input$resp_question
     if (is.null(qid) || !nzchar(qid)) return()
     if (!is.null(rv$shelf_result) && identical(as.character(rv$shelf_result$questionId), as.character(qid))) return()
-    st <- find_study(rv$study_id)
+    st <- get_cached_study(rv, rv$study_id)
     new_res <- aggregation_as_shelf_result(latest_aggregation(doc_id(st), qid, current_round(st)))
     if (is.null(new_res) && is.null(rv$shelf_result)) return()
     rv$shelf_result <- new_res
@@ -646,7 +732,7 @@ app_server <- function(input, output, session) {
   output$dl_csv <- shiny::downloadHandler(
     filename = function() sprintf("shelf-params-%s.csv", Sys.Date()),
     content = function(file) {
-      st <- find_study(rv$study_id)
+      st <- get_cached_study(rv, rv$study_id)
       require_role(can_export_audit(rv$user, st))
       write_audit_csv(file, rv$shelf_result, st)
     }
@@ -655,9 +741,9 @@ app_server <- function(input, output, session) {
   output$dl_pdf <- shiny::downloadHandler(
     filename = function() sprintf("complete-study-audit-%s.pdf", Sys.Date()),
     content = function(file) {
-      st <- find_study(rv$study_id)
+      st <- get_cached_study(rv, rv$study_id)
       require_role(can_export_audit(rv$user, st))
-      qs <- study_questions(doc_id(st))
+      qs <- get_cached_questions(rv, doc_id(st))
       q <- Filter(function(x) identical(doc_id(x), input$resp_question), qs)
       q <- if (length(q)) q[[1]] else qs[[1]]
       comments <- list_peer_comments(doc_id(st), doc_id(q), current_round(st))
@@ -668,9 +754,9 @@ app_server <- function(input, output, session) {
   output$dl_bundle <- shiny::downloadHandler(
     filename = function() sprintf("study-audit-bundle-%s.zip", Sys.Date()),
     content = function(file) {
-      st <- find_study(rv$study_id)
+      st <- get_cached_study(rv, rv$study_id)
       require_role(can_export_audit(rv$user, st))
-      qs <- study_questions(doc_id(st))
+      qs <- get_cached_questions(rv, doc_id(st))
       q <- Filter(function(x) identical(doc_id(x), input$resp_question), qs)
       q <- if (length(q)) q[[1]] else qs[[1]]
       comments <- list_peer_comments(doc_id(st), doc_id(q), current_round(st))
@@ -684,10 +770,10 @@ app_server <- function(input, output, session) {
   output$dl_quarto <- shiny::downloadHandler(
     filename = function() sprintf("shelf-dossier-%s.html", Sys.Date()),
     content = function(file) {
-      st <- find_study(rv$study_id)
+      st <- get_cached_study(rv, rv$study_id)
       require_role(can_export_audit(rv$user, st))
       shiny::req(rv$shelf_result)
-      qs <- study_questions(doc_id(st))
+      qs <- get_cached_questions(rv, doc_id(st))
       q <- Filter(function(x) identical(doc_id(x), input$resp_question), qs)
       q <- if (length(q)) q[[1]] else qs[[1]]
       render_quarto_dossier(file, st, q, current_round(st))
